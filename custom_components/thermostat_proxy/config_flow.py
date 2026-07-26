@@ -39,12 +39,15 @@ SENSOR_STEP = "sensors"
 FINALIZE_STEP = "finalize"
 CONF_ADD_ANOTHER = "add_another"
 CONF_ACTION = "action"
+CONF_TARGET_SENSOR = "target_sensor"
 
 ACTION_ADD_SENSOR = "add_sensor"
+ACTION_REPLACE_SENSOR = "replace_sensor"
 ACTION_REMOVE_SENSOR = "remove_sensor"
 ACTION_FINISH = "finish"
 ACTION_LABELS = {
     ACTION_ADD_SENSOR: "Add a sensor",
+    ACTION_REPLACE_SENSOR: "Replace a sensor",
     ACTION_REMOVE_SENSOR: "Remove a sensor",
     ACTION_FINISH: "Continue",
 }
@@ -184,6 +187,11 @@ class CustomThermostatConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             action = user_input[CONF_ACTION]
             if action == ACTION_ADD_SENSOR:
                 return await self.async_step_sensors()
+            if action == ACTION_REPLACE_SENSOR:
+                if not self._sensors:
+                    errors["base"] = "no_sensors"
+                else:
+                    return await self.async_step_replace_sensor()
             if action == ACTION_REMOVE_SENSOR:
                 if not self._sensors:
                     errors["base"] = "no_sensors"
@@ -197,6 +205,7 @@ class CustomThermostatConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         action_options = {ACTION_ADD_SENSOR: ACTION_LABELS[ACTION_ADD_SENSOR]}
         if self._sensors:
+            action_options[ACTION_REPLACE_SENSOR] = ACTION_LABELS[ACTION_REPLACE_SENSOR]
             action_options[ACTION_REMOVE_SENSOR] = ACTION_LABELS[ACTION_REMOVE_SENSOR]
             action_options[ACTION_FINISH] = ACTION_LABELS[ACTION_FINISH]
 
@@ -299,6 +308,70 @@ class CustomThermostatConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         return self.async_show_form(
             step_id="remove_sensor",
+            data_schema=data_schema,
+            errors=errors,
+        )
+
+    async def async_step_replace_sensor(self, user_input: dict[str, Any] | None = None):
+        if not self._sensors:
+            return await self.async_step_manage_sensors()
+
+        options = [sensor[CONF_SENSOR_NAME] for sensor in self._sensors]
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            target = user_input.get(CONF_TARGET_SENSOR)
+            sensor_name = user_input[CONF_SENSOR_NAME].strip()
+            entity_id = user_input[CONF_SENSOR_ENTITY_ID]
+
+            reserved_names = {
+                PHYSICAL_SENSOR_NAME.lower(),
+                self._physical_sensor_name.lower(),
+            }
+            if target not in options:
+                errors["base"] = "invalid_default_sensor"
+            elif sensor_name.lower() in reserved_names:
+                errors["base"] = "reserved_sensor_name"
+            elif any(
+                sensor_name == sensor[CONF_SENSOR_NAME]
+                for sensor in self._sensors
+                if sensor[CONF_SENSOR_NAME] != target
+            ):
+                errors["base"] = "duplicate_sensor_name"
+            elif any(
+                entity_id == sensor[CONF_SENSOR_ENTITY_ID]
+                for sensor in self._sensors
+                if sensor[CONF_SENSOR_NAME] != target
+            ):
+                errors["base"] = "duplicate_sensor_entity"
+            else:
+                for sensor in self._sensors:
+                    if sensor[CONF_SENSOR_NAME] == target:
+                        sensor[CONF_SENSOR_NAME] = sensor_name
+                        sensor[CONF_SENSOR_ENTITY_ID] = entity_id
+                        break
+                if self._default_sensor == target:
+                    self._default_sensor = sensor_name
+                return await self.async_step_manage_sensors()
+
+        data_schema = vol.Schema(
+            {
+                vol.Required(CONF_TARGET_SENSOR): selector.SelectSelector(
+                    selector.SelectSelectorConfig(options=options)
+                ),
+                vol.Required(CONF_SENSOR_NAME): selector.TextSelector(
+                    selector.TextSelectorConfig(type=selector.TextSelectorType.TEXT)
+                ),
+                vol.Required(CONF_SENSOR_ENTITY_ID): selector.EntitySelector(
+                    selector.EntitySelectorConfig(
+                        domain=["sensor", "climate", "number"],
+                        device_class="temperature",
+                    )
+                ),
+            }
+        )
+
+        return self.async_show_form(
+            step_id="replace_sensor",
             data_schema=data_schema,
             errors=errors,
         )

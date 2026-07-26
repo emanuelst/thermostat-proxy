@@ -114,3 +114,67 @@ async def test_options_flow(hass: HomeAssistant) -> None:
     assert result["type"] == FlowResultType.CREATE_ENTRY
     assert result["data"]["cooldown_period"] == 1800
     assert result["data"]["default_sensor"] == "Remote"
+
+
+@pytest.mark.asyncio
+async def test_user_flow_replace_sensor(hass: HomeAssistant) -> None:
+    """Test replacing a sensor in the config flow."""
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": config_entries.SOURCE_USER}
+    )
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {"name": "Proxy", "thermostat": "climate.real"},
+    )
+
+    # Add a sensor
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {"action": "add_sensor"},
+    )
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {"name": "Remote", "entity_id": "sensor.remote", "add_another": False},
+    )
+    assert result["step_id"] == "manage_sensors"
+
+    # Replace sensor action
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {"action": "replace_sensor"},
+    )
+    assert result["type"] == FlowResultType.FORM
+    assert result["step_id"] == "replace_sensor"
+
+    # Replace sensor with new name and entity
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {
+            "target_sensor": "Remote",
+            "name": "New Remote",
+            "entity_id": "sensor.new_remote",
+        },
+    )
+    assert result["type"] == FlowResultType.FORM
+    assert result["step_id"] == "manage_sensors"
+
+    # Finish
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {"action": "finish"},
+    )
+    assert result["step_id"] == "finalize"
+
+    # Finalize
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {
+            "cooldown_period": 1800,
+            "physical_sensor_name": "Physical",
+        },
+    )
+
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+    assert result["data"][CONF_SENSORS][0]["name"] == "New Remote"
+    assert result["data"][CONF_SENSORS][0]["entity_id"] == "sensor.new_remote"
+

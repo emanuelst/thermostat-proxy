@@ -41,6 +41,15 @@
           "name": "Sensor name"
         }
       },
+      "replace_sensor": {
+        "title": "Replace a sensor",
+        "description": "Select a sensor to replace and specify its new name and entity.",
+        "data": {
+          "target_sensor": "Sensor to replace",
+          "name": "New sensor name",
+          "entity_id": "New temperature entity"
+        }
+      },
       "finalize": {
         "title": "Defaults",
         "description": "Optionally rename the physical thermostat preset and decide which sensor (including the last active one) should be active on startup.",

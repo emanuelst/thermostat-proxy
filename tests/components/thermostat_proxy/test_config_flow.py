@@ -138,7 +138,7 @@ async def test_user_flow_replace_sensor(hass: HomeAssistant) -> None:
     )
     assert result["step_id"] == "manage_sensors"
 
-    # Replace sensor action
+    # Replace sensor action — select target
     result = await hass.config_entries.flow.async_configure(
         result["flow_id"],
         {"action": "replace_sensor"},
@@ -146,11 +146,18 @@ async def test_user_flow_replace_sensor(hass: HomeAssistant) -> None:
     assert result["type"] == FlowResultType.FORM
     assert result["step_id"] == "replace_sensor"
 
+    # Select which sensor to replace
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {"target_sensor": "Remote"},
+    )
+    assert result["type"] == FlowResultType.FORM
+    assert result["step_id"] == "replace_sensor_details"
+
     # Replace sensor with new name and entity
     result = await hass.config_entries.flow.async_configure(
         result["flow_id"],
         {
-            "target_sensor": "Remote",
             "name": "New Remote",
             "entity_id": "sensor.new_remote",
         },
@@ -177,4 +184,64 @@ async def test_user_flow_replace_sensor(hass: HomeAssistant) -> None:
     assert result["type"] == FlowResultType.CREATE_ENTRY
     assert result["data"][CONF_SENSORS][0]["name"] == "New Remote"
     assert result["data"][CONF_SENSORS][0]["entity_id"] == "sensor.new_remote"
+
+
+@pytest.mark.asyncio
+async def test_replace_sensor_keep_name(hass: HomeAssistant) -> None:
+    """Test replacing only the entity while keeping the pre-populated name."""
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": config_entries.SOURCE_USER}
+    )
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {"name": "Proxy", "thermostat": "climate.real"},
+    )
+
+    # Add a sensor
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {"action": "add_sensor"},
+    )
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {"name": "Remote", "entity_id": "sensor.remote", "add_another": False},
+    )
+
+    # Replace sensor — select target
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {"action": "replace_sensor"},
+    )
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {"target_sensor": "Remote"},
+    )
+    assert result["step_id"] == "replace_sensor_details"
+
+    # Submit with same name, different entity
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {
+            "name": "Remote",
+            "entity_id": "sensor.kitchen",
+        },
+    )
+    assert result["step_id"] == "manage_sensors"
+
+    # Finish
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {"action": "finish"},
+    )
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {
+            "cooldown_period": 1800,
+            "physical_sensor_name": "Physical",
+        },
+    )
+
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+    assert result["data"][CONF_SENSORS][0]["name"] == "Remote"
+    assert result["data"][CONF_SENSORS][0]["entity_id"] == "sensor.kitchen"
 

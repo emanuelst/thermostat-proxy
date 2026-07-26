@@ -76,6 +76,7 @@ class CustomThermostatConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self._max_sync_offset: float | None = None
         self._disable_auto_switch: bool = DEFAULT_DISABLE_AUTO_SWITCH
         self._reconfigure_entry: config_entries.ConfigEntry | None = None
+        self._replace_target: str | None = None
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None):
         errors: dict[str, str] = {}
@@ -320,6 +321,41 @@ class CustomThermostatConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         errors: dict[str, str] = {}
         if user_input is not None:
             target = user_input.get(CONF_TARGET_SENSOR)
+            if target not in options:
+                errors["base"] = "invalid_default_sensor"
+            else:
+                self._replace_target = target
+                return await self.async_step_replace_sensor_details()
+
+        data_schema = vol.Schema(
+            {
+                vol.Required(CONF_TARGET_SENSOR): selector.SelectSelector(
+                    selector.SelectSelectorConfig(options=options)
+                ),
+            }
+        )
+
+        return self.async_show_form(
+            step_id="replace_sensor",
+            data_schema=data_schema,
+            errors=errors,
+        )
+
+    async def async_step_replace_sensor_details(
+        self, user_input: dict[str, Any] | None = None
+    ):
+        target = self._replace_target
+        if target is None:
+            return await self.async_step_replace_sensor()
+
+        target_sensor = next(
+            (s for s in self._sensors if s[CONF_SENSOR_NAME] == target), None
+        )
+        if target_sensor is None:
+            return await self.async_step_manage_sensors()
+
+        errors: dict[str, str] = {}
+        if user_input is not None:
             sensor_name = user_input[CONF_SENSOR_NAME].strip()
             entity_id = user_input[CONF_SENSOR_ENTITY_ID]
 
@@ -327,9 +363,7 @@ class CustomThermostatConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 PHYSICAL_SENSOR_NAME.lower(),
                 self._physical_sensor_name.lower(),
             }
-            if target not in options:
-                errors["base"] = "invalid_default_sensor"
-            elif sensor_name.lower() in reserved_names:
+            if sensor_name.lower() in reserved_names:
                 errors["base"] = "reserved_sensor_name"
             elif any(
                 sensor_name == sensor[CONF_SENSOR_NAME]
@@ -344,24 +378,24 @@ class CustomThermostatConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             ):
                 errors["base"] = "duplicate_sensor_entity"
             else:
-                for sensor in self._sensors:
-                    if sensor[CONF_SENSOR_NAME] == target:
-                        sensor[CONF_SENSOR_NAME] = sensor_name
-                        sensor[CONF_SENSOR_ENTITY_ID] = entity_id
-                        break
+                target_sensor[CONF_SENSOR_NAME] = sensor_name
+                target_sensor[CONF_SENSOR_ENTITY_ID] = entity_id
                 if self._default_sensor == target:
                     self._default_sensor = sensor_name
+                self._replace_target = None
                 return await self.async_step_manage_sensors()
 
         data_schema = vol.Schema(
             {
-                vol.Required(CONF_TARGET_SENSOR): selector.SelectSelector(
-                    selector.SelectSelectorConfig(options=options)
-                ),
-                vol.Required(CONF_SENSOR_NAME): selector.TextSelector(
+                vol.Required(
+                    CONF_SENSOR_NAME, default=target_sensor[CONF_SENSOR_NAME]
+                ): selector.TextSelector(
                     selector.TextSelectorConfig(type=selector.TextSelectorType.TEXT)
                 ),
-                vol.Required(CONF_SENSOR_ENTITY_ID): selector.EntitySelector(
+                vol.Required(
+                    CONF_SENSOR_ENTITY_ID,
+                    default=target_sensor[CONF_SENSOR_ENTITY_ID],
+                ): selector.EntitySelector(
                     selector.EntitySelectorConfig(
                         domain=["sensor", "climate", "number"],
                         device_class="temperature",
@@ -371,7 +405,7 @@ class CustomThermostatConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         )
 
         return self.async_show_form(
-            step_id="replace_sensor",
+            step_id="replace_sensor_details",
             data_schema=data_schema,
             errors=errors,
         )

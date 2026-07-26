@@ -43,11 +43,17 @@
       },
       "replace_sensor": {
         "title": "Replace a sensor",
-        "description": "Select a sensor to replace and specify its new name and entity.",
+        "description": "Select a sensor to replace.",
         "data": {
-          "target_sensor": "Sensor to replace",
-          "name": "New sensor name",
-          "entity_id": "New temperature entity"
+          "target_sensor": "Sensor to replace"
+        }
+      },
+      "replace_sensor_details": {
+        "title": "Replace a sensor",
+        "description": "Update the name and temperature entity for this sensor.",
+        "data": {
+          "name": "Sensor name",
+          "entity_id": "Temperature entity"
         }
       },
       "finalize": {

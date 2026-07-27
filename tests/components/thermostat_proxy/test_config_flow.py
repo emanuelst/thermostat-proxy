@@ -244,4 +244,3 @@ async def test_replace_sensor_keep_name(hass: HomeAssistant) -> None:
     assert result["type"] == FlowResultType.CREATE_ENTRY
     assert result["data"][CONF_SENSORS][0]["name"] == "Remote"
     assert result["data"][CONF_SENSORS][0]["entity_id"] == "sensor.kitchen"
-

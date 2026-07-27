@@ -588,9 +588,6 @@ class CustomThermostatConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             vol.Optional(CONF_MAX_SYNC_OFFSET, default=max_sync_offset_default)
         ] = number_selector
         schema_fields[
-            vol.Optional(CONF_DISABLE_AUTO_SWITCH, default=self._disable_auto_switch)
-        ] = selector.BooleanSelector()
-        schema_fields[
             vol.Optional(
                 CONF_SENSOR_CHANGE_THRESHOLD, default=self._sensor_change_threshold
             )
@@ -617,6 +614,10 @@ class CustomThermostatConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 schema_fields[vol.Optional(CONF_DEFAULT_SENSOR)] = (
                     selector.SelectSelector(selector_config)
                 )
+
+        schema_fields[
+            vol.Optional(CONF_DISABLE_AUTO_SWITCH, default=self._disable_auto_switch)
+        ] = selector.BooleanSelector()
 
         data_schema = vol.Schema(schema_fields)
 
@@ -819,13 +820,13 @@ class CustomThermostatOptionsFlowHandler(config_entries.OptionsFlow):
             vol.Optional(CONF_MAX_SYNC_OFFSET, default=max_sync_offset_default)
         ] = number_selector
         schema_fields[
-            vol.Optional(CONF_DISABLE_AUTO_SWITCH, default=current_disable_auto_switch)
-        ] = selector.BooleanSelector()
-        schema_fields[
             vol.Optional(
                 CONF_SENSOR_CHANGE_THRESHOLD, default=current_sensor_change_threshold
             )
         ] = threshold_selector
+        schema_fields[
+            vol.Optional(CONF_DISABLE_AUTO_SWITCH, default=current_disable_auto_switch)
+        ] = selector.BooleanSelector()
 
         data_schema = vol.Schema(schema_fields)
 

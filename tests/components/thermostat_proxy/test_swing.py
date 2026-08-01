@@ -1,0 +1,108 @@
+"""Tests for swing passthrough."""
+
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+
+from homeassistant.components.climate import ClimateEntityFeature, HVACMode
+from homeassistant.core import CoreState, HomeAssistant, State
+
+from custom_components.thermostat_proxy.climate import CustomThermostatEntity
+
+
+@pytest.fixture
+def mock_hass():
+    """Return a minimal Home Assistant mock."""
+    hass = MagicMock(spec=HomeAssistant)
+    hass.state = CoreState.running
+    hass.data = {}
+    hass.states = MagicMock()
+    hass.config = MagicMock()
+    hass.config.units.temperature_unit = "°C"
+    hass.services = AsyncMock()
+    hass.async_create_task.side_effect = lambda coro: coro.close()
+    return hass
+
+
+def create_proxy(hass):
+    """Return a proxy wrapping a swing-capable climate entity."""
+    physical = State(
+        "climate.real",
+        HVACMode.COOL,
+        {
+            "current_temperature": 24.0,
+            "temperature": 23.0,
+            "target_temp_step": 0.5,
+            "supported_features": (
+                ClimateEntityFeature.TARGET_TEMPERATURE
+                | ClimateEntityFeature.SWING_MODE
+                | ClimateEntityFeature.SWING_HORIZONTAL_MODE
+            ),
+            "swing_mode": "stop",
+            "swing_modes": ["stop", "swing"],
+            "swing_horizontal_mode": "stop",
+            "swing_horizontal_modes": ["stop", "swing"],
+        },
+    )
+    hass.states.get.side_effect = lambda entity_id: (
+        physical if entity_id == "climate.real" else None
+    )
+    proxy = CustomThermostatEntity(
+        hass=hass,
+        name="Test Proxy",
+        real_thermostat="climate.real",
+        sensors=[{"name": "Remote", "entity_id": "sensor.remote"}],
+        default_sensor="Remote",
+        unique_id="123",
+        physical_sensor_name="Physical",
+        use_last_active_sensor=False,
+    )
+    proxy._real_state = physical
+    proxy._update_real_temperature_limits()
+    return proxy
+
+
+@pytest.mark.asyncio
+async def test_swing_features_and_state_are_forwarded(mock_hass):
+    """Expose the physical entity's swing capabilities and state."""
+    proxy = create_proxy(mock_hass)
+
+    assert proxy.supported_features & ClimateEntityFeature.SWING_MODE
+    assert proxy.supported_features & ClimateEntityFeature.SWING_HORIZONTAL_MODE
+    assert proxy.swing_mode == "stop"
+    assert proxy.swing_modes == ["stop", "swing"]
+    assert proxy.swing_horizontal_mode == "stop"
+    assert proxy.swing_horizontal_modes == ["stop", "swing"]
+
+
+@pytest.mark.asyncio
+async def test_vertical_swing_is_forwarded(mock_hass):
+    """Forward vertical swing commands to the physical entity."""
+    proxy = create_proxy(mock_hass)
+
+    await proxy.async_set_swing_mode("swing")
+
+    mock_hass.services.async_call.assert_awaited_with(
+        "climate",
+        "set_swing_mode",
+        {"entity_id": "climate.real", "swing_mode": "swing"},
+        blocking=True,
+    )
+
+
+@pytest.mark.asyncio
+async def test_horizontal_swing_is_forwarded(mock_hass):
+    """Forward horizontal swing commands to the physical entity."""
+    proxy = create_proxy(mock_hass)
+
+    await proxy.async_set_swing_horizontal_mode("swing")
+
+    mock_hass.services.async_call.assert_awaited_with(
+        "climate",
+        "set_swing_horizontal_mode",
+        {
+            "entity_id": "climate.real",
+            "swing_horizontal_mode": "swing",
+        },
+        blocking=True,
+    )

@@ -116,6 +116,10 @@ _RESERVED_REAL_ATTRIBUTES = {
     "supported_features",
     "fan_mode",
     "fan_modes",
+    "swing_mode",
+    "swing_modes",
+    "swing_horizontal_mode",
+    "swing_horizontal_modes",
     "target_temp_high",
     "target_temp_low",
     "current_humidity",
@@ -1417,6 +1421,32 @@ class CustomThermostatEntity(RestoreEntity, ClimateEntity):
             blocking=True,
         )
 
+    async def async_set_swing_mode(self, swing_mode: str) -> None:
+        """Set the physical thermostat's vertical swing mode."""
+        await self.hass.services.async_call(
+            CLIMATE_DOMAIN,
+            "set_swing_mode",
+            {
+                ATTR_ENTITY_ID: self._real_entity_id,
+                "swing_mode": swing_mode,
+            },
+            blocking=True,
+        )
+
+    async def async_set_swing_horizontal_mode(
+        self, swing_horizontal_mode: str
+    ) -> None:
+        """Set the physical thermostat's horizontal swing mode."""
+        await self.hass.services.async_call(
+            CLIMATE_DOMAIN,
+            "set_swing_horizontal_mode",
+            {
+                ATTR_ENTITY_ID: self._real_entity_id,
+                "swing_horizontal_mode": swing_horizontal_mode,
+            },
+            blocking=True,
+        )
+
     async def async_set_preset_mode(self, preset_mode: str) -> None:
         self._log_debug("async_set_preset_mode called with preset: %s", preset_mode)
         if preset_mode not in self._sensor_lookup:
@@ -2197,6 +2227,10 @@ class CustomThermostatEntity(RestoreEntity, ClimateEntity):
 
         if supported & ClimateEntityFeature.FAN_MODE:
             base_features |= ClimateEntityFeature.FAN_MODE
+        if supported & ClimateEntityFeature.SWING_MODE:
+            base_features |= ClimateEntityFeature.SWING_MODE
+        if supported & ClimateEntityFeature.SWING_HORIZONTAL_MODE:
+            base_features |= ClimateEntityFeature.SWING_HORIZONTAL_MODE
         self._attr_supported_features = base_features
 
     def _update_sensor_health_from_state(
@@ -2594,6 +2628,34 @@ class CustomThermostatEntity(RestoreEntity, ClimateEntity):
         """Return the list of available fan modes."""
         if self._real_state:
             return self._real_state.attributes.get("fan_modes")
+        return None
+
+    @property
+    def swing_mode(self) -> str | None:
+        """Return the physical thermostat's vertical swing setting."""
+        if self._real_state:
+            return self._real_state.attributes.get("swing_mode")
+        return None
+
+    @property
+    def swing_modes(self) -> list[str] | None:
+        """Return the physical thermostat's vertical swing modes."""
+        if self._real_state:
+            return self._real_state.attributes.get("swing_modes")
+        return None
+
+    @property
+    def swing_horizontal_mode(self) -> str | None:
+        """Return the physical thermostat's horizontal swing setting."""
+        if self._real_state:
+            return self._real_state.attributes.get("swing_horizontal_mode")
+        return None
+
+    @property
+    def swing_horizontal_modes(self) -> list[str] | None:
+        """Return the physical thermostat's horizontal swing modes."""
+        if self._real_state:
+            return self._real_state.attributes.get("swing_horizontal_modes")
         return None
 
 

@@ -138,5 +138,7 @@ async def test_disable_auto_switch_logbook_math(mock_hass):
     call_args = mock_hass.services.async_call.call_args[0]
     domain, service, data = call_args
     assert domain == "logbook"
-    assert "26.0°C - 1.0°C = 25.0°C" in data["message"] or "virtual_target=25.0°C" in data["message"]
-
+    assert (
+        "26.0°C - 1.0°C = 25.0°C" in data["message"]
+        or "virtual_target=25.0°C" in data["message"]
+    )

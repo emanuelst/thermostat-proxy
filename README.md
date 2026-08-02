@@ -27,6 +27,7 @@ A Home Assistant custom integration that lets you expose a virtual `climate` ent
 - **Fan Mode Support**: Fully proxies the real thermostat's fan modes. You can control the fan (Auto/On/Low/etc.) seamlessly through the proxy entity.
 - **User Log Attribution**: Logbook entries for target temperature or preset changes will show which user performed the action.
 - **Safety Limits**: Configure custom `min_temp` and `max_temp` bounds. Calculated targets are clamped to these limits to prevent extreme requests due to sensor anomalies or to respect operational restrictions enforced by certain thermostats that aren't exposed through their Home Assistant attributes.
+- **Sensor Change Threshold**: Configurable `sensor_change_threshold` (e.g. 0.5°) to prevent equipment short-cycling by filtering minor sensor fluctuations, while always overriding the threshold when the remote sensor reaches or crosses the target temperature.
 - Default sensor selector includes a "Last active sensor" option (during setup or in options) so the proxy resumes with the most recently selected sensor instead of the configured default.
 
 ## Configuration
@@ -42,6 +43,7 @@ A Home Assistant custom integration that lets you expose a virtual `climate` ent
 | `max_temp` | No | `0` (Disabled) | **Maximum Safe Temperature Limit**: Calculated targets sent to the physical thermostat will not exceed this value. Set to 0 to disable. |
 | `max_sync_offset` | No | `10.0` (Disabled via 0) | **Maximum Sync Offset**: Circuit breaker to prevent wild sensor readings. Limits how far the physical thermostat target can drift from the virtual target. |
 | `disable_auto_switch` | No | `False` | **Disable Auto-Switch**: When turned on, the proxy will maintain the active remote sensor and its offset when a manual change is made directly on the physical thermostat, instead of automatically falling back to the physical preset. |
+| `sensor_change_threshold` | No | `0.0` (Disabled) | **Sensor Change Threshold**: Minimum temperature change (in degrees) required on the active remote sensor before pushing a setpoint adjustment to the physical thermostat. Prevents short-cycling while ensuring target crossings immediately trigger adjustments. |
 
 ## How It Works
 

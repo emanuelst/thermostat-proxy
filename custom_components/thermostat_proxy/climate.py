@@ -83,6 +83,8 @@ from .const import (
     DEFAULT_MAX_SYNC_OFFSET,
     CONF_DISABLE_AUTO_SWITCH,
     DEFAULT_DISABLE_AUTO_SWITCH,
+    CONF_SENSOR_CHANGE_THRESHOLD,
+    DEFAULT_SENSOR_CHANGE_THRESHOLD,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -151,6 +153,9 @@ PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(
         vol.Optional(
             CONF_DISABLE_AUTO_SWITCH, default=DEFAULT_DISABLE_AUTO_SWITCH
         ): cv.boolean,
+        vol.Optional(
+            CONF_SENSOR_CHANGE_THRESHOLD, default=DEFAULT_SENSOR_CHANGE_THRESHOLD
+        ): vol.Coerce(float),
     }
 )
 
@@ -190,6 +195,9 @@ async def async_setup_platform(
                 max_sync_offset=config.get(CONF_MAX_SYNC_OFFSET),
                 disable_auto_switch=config.get(
                     CONF_DISABLE_AUTO_SWITCH, DEFAULT_DISABLE_AUTO_SWITCH
+                ),
+                sensor_change_threshold=config.get(
+                    CONF_SENSOR_CHANGE_THRESHOLD, DEFAULT_SENSOR_CHANGE_THRESHOLD
                 ),
             )
         ]
@@ -244,6 +252,10 @@ async def async_setup_entry(
         CONF_DISABLE_AUTO_SWITCH,
         data.get(CONF_DISABLE_AUTO_SWITCH, DEFAULT_DISABLE_AUTO_SWITCH),
     )
+    sensor_change_threshold = entry.options.get(
+        CONF_SENSOR_CHANGE_THRESHOLD,
+        data.get(CONF_SENSOR_CHANGE_THRESHOLD, DEFAULT_SENSOR_CHANGE_THRESHOLD),
+    )
 
     if raw_default_sensor == DEFAULT_SENSOR_LAST_ACTIVE:
         use_last_active_sensor = True
@@ -275,6 +287,7 @@ async def async_setup_entry(
                 user_max_temp=user_max_temp,
                 max_sync_offset=max_sync_offset,
                 disable_auto_switch=disable_auto_switch,
+                sensor_change_threshold=sensor_change_threshold,
             )
         ]
     )
@@ -309,6 +322,7 @@ class CustomThermostatEntity(RestoreEntity, ClimateEntity):
         user_max_temp: float | None = None,
         max_sync_offset: float | None = None,
         disable_auto_switch: bool = False,
+        sensor_change_threshold: float = DEFAULT_SENSOR_CHANGE_THRESHOLD,
     ) -> None:
         self.hass = hass
         if isinstance(cooldown_period, (int, float)):
@@ -361,12 +375,16 @@ class CustomThermostatEntity(RestoreEntity, ClimateEntity):
         self._user_max_temp: float | None = user_max_temp
         self._max_sync_offset: float | None = max_sync_offset
         self._disable_auto_switch: bool = disable_auto_switch
+        self._sensor_change_threshold: float = float(sensor_change_threshold)
+        self._last_acted_sensor_temp: float | None = None
         self._target_temp_step: float | None = None
         self._precision_override: float | None = None
         self._entity_health: dict[str, bool] = {}
         self._command_lock = asyncio.Lock()
         self._sensor_realign_task: asyncio.Task | None = None
         self._suppress_sync_logs_until: float | None = None
+        self._realign_trigger_source: str | None = None
+        self._realign_trigger_source: str | None = None
         self._cooldown_timer_unsub: Callable[[], None] | None = None
         self._sensor_precisions: dict[str, float] = {}
 
@@ -647,7 +665,7 @@ class CustomThermostatEntity(RestoreEntity, ClimateEntity):
                 real_target_low, real_target_high, skip_external_change
             )
 
-        self._schedule_target_realign()
+        self._schedule_target_realign(trigger_source="real")
         self.async_write_ha_state()
 
     @callback
@@ -668,7 +686,7 @@ class CustomThermostatEntity(RestoreEntity, ClimateEntity):
             self._sensor_precisions[entity_id] = self._infer_sensor_precision(new_state)
         self._update_sensor_health_from_state(entity_id, new_state)
         if self._is_active_sensor_entity(entity_id):
-            self._schedule_target_realign()
+            self._schedule_target_realign(trigger_source="sensor")
         self.async_write_ha_state()
 
     def _is_active_sensor_entity(self, entity_id: str | None) -> bool:
@@ -679,13 +697,23 @@ class CustomThermostatEntity(RestoreEntity, ClimateEntity):
             return False
         return sensor.entity_id == entity_id
 
-    def _schedule_target_realign(self, retry: bool = False) -> None:
+    def _schedule_target_realign(
+        self, retry: bool = False, trigger_source: str | None = None
+    ) -> None:
         if self._sensor_realign_task and not self._sensor_realign_task.done():
+            if trigger_source != "sensor":
+                self._realign_trigger_source = None
             return
+
+        self._realign_trigger_source = trigger_source
 
         async def _run():
             try:
-                await self._async_realign_real_target_from_sensor(retry=retry)
+                current_trigger = self._realign_trigger_source
+                self._realign_trigger_source = None
+                await self._async_realign_real_target_from_sensor(
+                    retry=retry, trigger_source=current_trigger
+                )
             finally:
                 self._sensor_realign_task = None
 
@@ -1423,7 +1451,7 @@ class CustomThermostatEntity(RestoreEntity, ClimateEntity):
             )
             if real_target is not None:
                 self._sync_virtual_target_from_real(real_target)
-        await self._async_realign_real_target_from_sensor()
+        await self._async_realign_real_target_from_sensor(trigger_source="preset")
         self.async_write_ha_state()
 
         sensor = self._sensor_lookup.get(preset_mode)
@@ -1597,7 +1625,75 @@ class CustomThermostatEntity(RestoreEntity, ClimateEntity):
             return True
         return False
 
-    async def _async_realign_real_target_from_sensor(self, retry: bool = False) -> None:
+    def _did_just_meet_target(self, sensor_temp: float) -> bool:
+        """Check if active sensor just crossed/met any target temperature."""
+        if self._last_acted_sensor_temp is None:
+            return False
+
+        # Single target check
+        if self._virtual_target_temperature is not None:
+            if self.hvac_mode == HVACMode.COOL:
+                if (
+                    sensor_temp <= self._virtual_target_temperature
+                    and self._last_acted_sensor_temp > self._virtual_target_temperature
+                ):
+                    return True
+            elif self.hvac_mode == HVACMode.HEAT:
+                if (
+                    sensor_temp >= self._virtual_target_temperature
+                    and self._last_acted_sensor_temp < self._virtual_target_temperature
+                ):
+                    return True
+
+        # Dual target check
+        if self.is_range_mode:
+            high = self._virtual_target_temperature_high
+            low = self._virtual_target_temperature_low
+            if (
+                high is not None
+                and sensor_temp <= high
+                and self._last_acted_sensor_temp > high
+            ):
+                return True
+            if (
+                low is not None
+                and sensor_temp >= low
+                and self._last_acted_sensor_temp < low
+            ):
+                return True
+
+        return False
+
+    def _should_skip_sensor_realign(
+        self, sensor_temp: float, trigger_source: str | None
+    ) -> bool:
+        """Return True if sensor realignment should be skipped due to threshold logic."""
+        threshold = self._sensor_change_threshold
+        if (
+            trigger_source != "sensor"
+            or self._last_acted_sensor_temp is None
+            or threshold <= 0
+        ):
+            return False
+
+        if self._did_just_meet_target(sensor_temp):
+            return False
+
+        if abs(sensor_temp - self._last_acted_sensor_temp) < threshold:
+            self._log_debug(
+                "Skipping realign: sensor change (%.2f -> %.2f = %.2f) below threshold (%.2f)",
+                self._last_acted_sensor_temp,
+                sensor_temp,
+                abs(sensor_temp - self._last_acted_sensor_temp),
+                threshold,
+            )
+            return True
+
+        return False
+
+    async def _async_realign_real_target_from_sensor(
+        self, retry: bool = False, trigger_source: str | None = None
+    ) -> None:
         """Push a new target temperature to the real thermostat based on the active sensor."""
 
         if self.is_range_mode:
@@ -1647,6 +1743,11 @@ class CustomThermostatEntity(RestoreEntity, ClimateEntity):
 
             if sensor_temp is None or real_current is None:
                 return
+
+            if self._should_skip_sensor_realign(sensor_temp, trigger_source):
+                return
+
+            self._last_acted_sensor_temp = sensor_temp
 
             if self.is_range_mode:
                 await self._async_realign_dual_targets(sensor_temp, real_current)

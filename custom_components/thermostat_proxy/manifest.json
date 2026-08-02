@@ -1,9 +1,13 @@
 {
   "domain": "thermostat_proxy",
   "name": "Thermostat Proxy",
-  "codeowners": ["@jianyu-li"],
+  "codeowners": [
+    "@jianyu-li"
+  ],
   "config_flow": true,
-  "dependencies": ["logbook"],
+  "dependencies": [
+    "logbook"
+  ],
   "documentation": "https://github.com/jianyu-li/thermostat-proxy",
   "iot_class": "assumed_state",
   "issue_tracker": "https://github.com/jianyu-li/thermostat-proxy/issues",

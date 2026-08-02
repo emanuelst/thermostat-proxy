@@ -33,18 +33,23 @@ from .const import (
     DEFAULT_MAX_SYNC_OFFSET,
     CONF_DISABLE_AUTO_SWITCH,
     DEFAULT_DISABLE_AUTO_SWITCH,
+    CONF_SENSOR_CHANGE_THRESHOLD,
+    DEFAULT_SENSOR_CHANGE_THRESHOLD,
 )
 
 SENSOR_STEP = "sensors"
 FINALIZE_STEP = "finalize"
 CONF_ADD_ANOTHER = "add_another"
 CONF_ACTION = "action"
+CONF_TARGET_SENSOR = "target_sensor"
 
 ACTION_ADD_SENSOR = "add_sensor"
+ACTION_REPLACE_SENSOR = "replace_sensor"
 ACTION_REMOVE_SENSOR = "remove_sensor"
 ACTION_FINISH = "finish"
 ACTION_LABELS = {
     ACTION_ADD_SENSOR: "Add a sensor",
+    ACTION_REPLACE_SENSOR: "Replace a sensor",
     ACTION_REMOVE_SENSOR: "Remove a sensor",
     ACTION_FINISH: "Continue",
 }
@@ -72,7 +77,9 @@ class CustomThermostatConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self._max_temp: float | None = None
         self._max_sync_offset: float | None = None
         self._disable_auto_switch: bool = DEFAULT_DISABLE_AUTO_SWITCH
+        self._sensor_change_threshold: float = DEFAULT_SENSOR_CHANGE_THRESHOLD
         self._reconfigure_entry: config_entries.ConfigEntry | None = None
+        self._replace_target: str | None = None
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None):
         errors: dict[str, str] = {}
@@ -144,6 +151,9 @@ class CustomThermostatConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self._disable_auto_switch = entry.data.get(
             CONF_DISABLE_AUTO_SWITCH, DEFAULT_DISABLE_AUTO_SWITCH
         )
+        self._sensor_change_threshold = entry.data.get(
+            CONF_SENSOR_CHANGE_THRESHOLD, DEFAULT_SENSOR_CHANGE_THRESHOLD
+        )
         self._use_last_active_sensor = entry.data.get(
             CONF_USE_LAST_ACTIVE_SENSOR, False
         )
@@ -184,6 +194,11 @@ class CustomThermostatConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             action = user_input[CONF_ACTION]
             if action == ACTION_ADD_SENSOR:
                 return await self.async_step_sensors()
+            if action == ACTION_REPLACE_SENSOR:
+                if not self._sensors:
+                    errors["base"] = "no_sensors"
+                else:
+                    return await self.async_step_replace_sensor()
             if action == ACTION_REMOVE_SENSOR:
                 if not self._sensors:
                     errors["base"] = "no_sensors"
@@ -197,6 +212,7 @@ class CustomThermostatConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         action_options = {ACTION_ADD_SENSOR: ACTION_LABELS[ACTION_ADD_SENSOR]}
         if self._sensors:
+            action_options[ACTION_REPLACE_SENSOR] = ACTION_LABELS[ACTION_REPLACE_SENSOR]
             action_options[ACTION_REMOVE_SENSOR] = ACTION_LABELS[ACTION_REMOVE_SENSOR]
             action_options[ACTION_FINISH] = ACTION_LABELS[ACTION_FINISH]
 
@@ -303,6 +319,103 @@ class CustomThermostatConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             errors=errors,
         )
 
+    async def async_step_replace_sensor(self, user_input: dict[str, Any] | None = None):
+        if not self._sensors:
+            return await self.async_step_manage_sensors()
+
+        options = [sensor[CONF_SENSOR_NAME] for sensor in self._sensors]
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            target = user_input.get(CONF_TARGET_SENSOR)
+            if target not in options:
+                errors["base"] = "invalid_default_sensor"
+            else:
+                self._replace_target = target
+                return await self.async_step_replace_sensor_details()
+
+        data_schema = vol.Schema(
+            {
+                vol.Required(CONF_TARGET_SENSOR): selector.SelectSelector(
+                    selector.SelectSelectorConfig(options=options)
+                ),
+            }
+        )
+
+        return self.async_show_form(
+            step_id="replace_sensor",
+            data_schema=data_schema,
+            errors=errors,
+        )
+
+    async def async_step_replace_sensor_details(
+        self, user_input: dict[str, Any] | None = None
+    ):
+        target = self._replace_target
+        if target is None:
+            return await self.async_step_replace_sensor()
+
+        target_sensor = next(
+            (s for s in self._sensors if s[CONF_SENSOR_NAME] == target), None
+        )
+        if target_sensor is None:
+            return await self.async_step_manage_sensors()
+
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            sensor_name = user_input[CONF_SENSOR_NAME].strip()
+            entity_id = user_input[CONF_SENSOR_ENTITY_ID]
+
+            reserved_names = {
+                PHYSICAL_SENSOR_NAME.lower(),
+                self._physical_sensor_name.lower(),
+            }
+            if sensor_name.lower() in reserved_names:
+                errors["base"] = "reserved_sensor_name"
+            elif any(
+                sensor_name == sensor[CONF_SENSOR_NAME]
+                for sensor in self._sensors
+                if sensor[CONF_SENSOR_NAME] != target
+            ):
+                errors["base"] = "duplicate_sensor_name"
+            elif any(
+                entity_id == sensor[CONF_SENSOR_ENTITY_ID]
+                for sensor in self._sensors
+                if sensor[CONF_SENSOR_NAME] != target
+            ):
+                errors["base"] = "duplicate_sensor_entity"
+            else:
+                target_sensor[CONF_SENSOR_NAME] = sensor_name
+                target_sensor[CONF_SENSOR_ENTITY_ID] = entity_id
+                if self._default_sensor == target:
+                    self._default_sensor = sensor_name
+                self._replace_target = None
+                return await self.async_step_manage_sensors()
+
+        data_schema = vol.Schema(
+            {
+                vol.Required(
+                    CONF_SENSOR_NAME, default=target_sensor[CONF_SENSOR_NAME]
+                ): selector.TextSelector(
+                    selector.TextSelectorConfig(type=selector.TextSelectorType.TEXT)
+                ),
+                vol.Required(
+                    CONF_SENSOR_ENTITY_ID,
+                    default=target_sensor[CONF_SENSOR_ENTITY_ID],
+                ): selector.EntitySelector(
+                    selector.EntitySelectorConfig(
+                        domain=["sensor", "climate", "number"],
+                        device_class="temperature",
+                    )
+                ),
+            }
+        )
+
+        return self.async_show_form(
+            step_id="replace_sensor_details",
+            data_schema=data_schema,
+            errors=errors,
+        )
+
     async def async_step_finalize(self, user_input: dict[str, Any] | None = None):
         errors: dict[str, str] = {}
         if not self._sensors:
@@ -337,6 +450,13 @@ class CustomThermostatConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             disable_auto_switch = user_input.get(
                 CONF_DISABLE_AUTO_SWITCH, DEFAULT_DISABLE_AUTO_SWITCH
             )
+            sensor_change_threshold = (
+                user_input.get(
+                    CONF_SENSOR_CHANGE_THRESHOLD, DEFAULT_SENSOR_CHANGE_THRESHOLD
+                )
+                if user_input.get(CONF_SENSOR_CHANGE_THRESHOLD) is not None
+                else DEFAULT_SENSOR_CHANGE_THRESHOLD
+            )
 
             if any(
                 physical_sensor_name.lower() == sensor_name.lower()
@@ -368,6 +488,7 @@ class CustomThermostatConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 self._max_temp = max_temp
                 self._max_sync_offset = max_sync_offset
                 self._disable_auto_switch = disable_auto_switch
+                self._sensor_change_threshold = sensor_change_threshold
                 self._use_last_active_sensor = use_last_active_sensor
 
                 sensor_names_with_physical = list(sensor_names)
@@ -384,6 +505,7 @@ class CustomThermostatConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     CONF_MAX_TEMP: max_temp,
                     CONF_MAX_SYNC_OFFSET: max_sync_offset,
                     CONF_DISABLE_AUTO_SWITCH: disable_auto_switch,
+                    CONF_SENSOR_CHANGE_THRESHOLD: sensor_change_threshold,
                 }
                 if self._use_last_active_sensor:
                     data[CONF_DEFAULT_SENSOR] = DEFAULT_SENSOR_LAST_ACTIVE
@@ -399,6 +521,7 @@ class CustomThermostatConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         CONF_MAX_TEMP,
                         CONF_MAX_SYNC_OFFSET,
                         CONF_DISABLE_AUTO_SWITCH,
+                        CONF_SENSOR_CHANGE_THRESHOLD,
                         CONF_USE_LAST_ACTIVE_SENSOR,
                     ):
                         if key in options:
@@ -440,6 +563,12 @@ class CustomThermostatConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             )
         )
 
+        threshold_selector = selector.NumberSelector(
+            selector.NumberSelectorConfig(
+                min=0.0, max=10.0, step=0.1, mode=selector.NumberSelectorMode.BOX
+            )
+        )
+
         # Show current values as defaults during reconfigure (0 = disabled)
         min_temp_default = self._min_temp if self._min_temp is not None else 0
         max_temp_default = self._max_temp if self._max_temp is not None else 0
@@ -459,8 +588,10 @@ class CustomThermostatConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             vol.Optional(CONF_MAX_SYNC_OFFSET, default=max_sync_offset_default)
         ] = number_selector
         schema_fields[
-            vol.Optional(CONF_DISABLE_AUTO_SWITCH, default=self._disable_auto_switch)
-        ] = selector.BooleanSelector()
+            vol.Optional(
+                CONF_SENSOR_CHANGE_THRESHOLD, default=self._sensor_change_threshold
+            )
+        ] = threshold_selector
 
         if sensor_names:
             default_options = [
@@ -483,6 +614,10 @@ class CustomThermostatConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 schema_fields[vol.Optional(CONF_DEFAULT_SENSOR)] = (
                     selector.SelectSelector(selector_config)
                 )
+
+        schema_fields[
+            vol.Optional(CONF_DISABLE_AUTO_SWITCH, default=self._disable_auto_switch)
+        ] = selector.BooleanSelector()
 
         data_schema = vol.Schema(schema_fields)
 
@@ -561,6 +696,12 @@ class CustomThermostatOptionsFlowHandler(config_entries.OptionsFlow):
                 CONF_DISABLE_AUTO_SWITCH, DEFAULT_DISABLE_AUTO_SWITCH
             ),
         )
+        current_sensor_change_threshold = self.config_entry.options.get(
+            CONF_SENSOR_CHANGE_THRESHOLD,
+            self.config_entry.data.get(
+                CONF_SENSOR_CHANGE_THRESHOLD, DEFAULT_SENSOR_CHANGE_THRESHOLD
+            ),
+        )
 
         if current_default == DEFAULT_SENSOR_LAST_ACTIVE:
             use_last_active_sensor = True
@@ -574,6 +715,13 @@ class CustomThermostatOptionsFlowHandler(config_entries.OptionsFlow):
             max_sync_offset = user_input.get(CONF_MAX_SYNC_OFFSET) or None
             disable_auto_switch = user_input.get(
                 CONF_DISABLE_AUTO_SWITCH, DEFAULT_DISABLE_AUTO_SWITCH
+            )
+            sensor_change_threshold = (
+                user_input.get(
+                    CONF_SENSOR_CHANGE_THRESHOLD, DEFAULT_SENSOR_CHANGE_THRESHOLD
+                )
+                if user_input.get(CONF_SENSOR_CHANGE_THRESHOLD) is not None
+                else DEFAULT_SENSOR_CHANGE_THRESHOLD
             )
 
             if default_sensor and default_sensor not in (
@@ -600,6 +748,7 @@ class CustomThermostatOptionsFlowHandler(config_entries.OptionsFlow):
                 data[CONF_MAX_TEMP] = max_temp
                 data[CONF_MAX_SYNC_OFFSET] = max_sync_offset
                 data[CONF_DISABLE_AUTO_SWITCH] = disable_auto_switch
+                data[CONF_SENSOR_CHANGE_THRESHOLD] = sensor_change_threshold
 
                 return self.async_create_entry(title="", data=data)
 
@@ -646,6 +795,12 @@ class CustomThermostatOptionsFlowHandler(config_entries.OptionsFlow):
             )
         )
 
+        threshold_selector = selector.NumberSelector(
+            selector.NumberSelectorConfig(
+                min=0.0, max=10.0, step=0.1, mode=selector.NumberSelectorMode.BOX
+            )
+        )
+
         # Show current values as defaults in options (0 = disabled)
         min_temp_default = current_min_temp if current_min_temp is not None else 0
         max_temp_default = current_max_temp if current_max_temp is not None else 0
@@ -664,6 +819,11 @@ class CustomThermostatOptionsFlowHandler(config_entries.OptionsFlow):
         schema_fields[
             vol.Optional(CONF_MAX_SYNC_OFFSET, default=max_sync_offset_default)
         ] = number_selector
+        schema_fields[
+            vol.Optional(
+                CONF_SENSOR_CHANGE_THRESHOLD, default=current_sensor_change_threshold
+            )
+        ] = threshold_selector
         schema_fields[
             vol.Optional(CONF_DISABLE_AUTO_SWITCH, default=current_disable_auto_switch)
         ] = selector.BooleanSelector()

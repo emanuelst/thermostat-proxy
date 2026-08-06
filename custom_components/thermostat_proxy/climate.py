@@ -1056,30 +1056,56 @@ class CustomThermostatEntity(RestoreEntity, ClimateEntity):
 
     @property
     def target_temperature_step(self) -> float | None:
+        """Return the physical thermostat's supported target step.
+
+        A remote sensor's state formatting describes measurement/display
+        precision, not the resolution that the physical thermostat can accept.
+        In particular, a sensor may report an integer temporarily even though
+        the physical thermostat still supports half-degree targets.
+        """
         base = (
             self._target_temp_step
             or self._precision_override
             or super().target_temperature_step
         )
-        if base is not None:
-            return max(base, self._get_active_sensor_precision())
         return base
 
     @property
     def precision(self) -> float:
+        """Return a display precision supported by Home Assistant.
+
+        Keep the displayed remote-sensor reading as granular as a normal
+        Celsius climate value (tenths), but never let a coarse or noisy sensor
+        state hide valid half-degree thermostat targets.
+        """
+        base = (
+            self._target_temp_step
+            or self._precision_override
+            or super().precision
+        )
         sensor = self._sensor_lookup.get(self._selected_sensor_name)
         if sensor and not sensor.is_physical:
-            return self._sensor_precisions.get(sensor.entity_id, DEFAULT_PRECISION)
-        if self._precision_override is not None:
-            return self._precision_override
-        return super().precision
+            sensor_precision = self._get_active_sensor_display_precision()
+            if base is not None:
+                return min(base, sensor_precision)
+            return sensor_precision
+        return base
 
     def _get_active_sensor_precision(self) -> float:
         """Return the active sensor's inferred precision, or DEFAULT_PRECISION."""
         sensor = self._sensor_lookup.get(self._selected_sensor_name)
         if not sensor or sensor.is_physical:
-            return 0  # Physical sensor doesn't constrain — thermostat precision governs
+            return 0
         return self._sensor_precisions.get(sensor.entity_id, DEFAULT_PRECISION)
+
+    def _get_active_sensor_display_precision(self) -> float:
+        """Return a Home Assistant-compatible precision for the active sensor."""
+        inferred = self._get_active_sensor_precision()
+        # Home Assistant climate display precision is whole degrees or tenths
+        # (with half-degree support where the physical entity requires it).
+        # Floating-point artifacts such as 23.2000007629395 must not become a
+        # tiny precision that makes the frontend round targets to whole degrees.
+        return 1.0 if inferred >= 1.0 else DEFAULT_PRECISION
 
     def _infer_sensor_precision(self, state: State | None) -> float:
         """Infer precision from a sensor state's decimal places."""

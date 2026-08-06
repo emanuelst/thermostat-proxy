@@ -101,6 +101,7 @@ POST_WRITE_GRACE_PERIOD = 10.0  # Seconds to ignore external changes after a wri
 REALIGN_TARGET_TOLERANCE = (
     0.1  # Tolerance for "already at target" checks during realignment
 )
+OVERDRIVE_MINIMUM_ERROR = 0.5
 
 # Attributes supplied by ClimateEntity itself that must NOT be overridden by
 # forwarding the physical thermostat's attributes, otherwise the front-end sees
@@ -1794,6 +1795,11 @@ class CustomThermostatEntity(RestoreEntity, ClimateEntity):
                 "Calculated real target: %s (delta: %s)", calculated_real_target, delta
             )
 
+            normal_real_target = self._apply_safety_clamp(calculated_real_target)
+            if normal_real_target is None:
+                return
+            normal_real_target = self._apply_target_constraints(normal_real_target)
+
             # Overdrive Logic: Check if we are stalled
             # Stalled = Target not met AND Real Thermostat is Idle
             overdrive_active = False
@@ -1801,15 +1807,18 @@ class CustomThermostatEntity(RestoreEntity, ClimateEntity):
 
             if self._real_state and self.hvac_mode in (HVACMode.HEAT, HVACMode.COOL):
                 real_action = self._real_state.attributes.get(ATTR_HVAC_ACTION)
-                tolerance = max(self.precision or DEFAULT_PRECISION, 0.1)
 
                 # Heat Mode Stall
                 if self.hvac_mode == HVACMode.HEAT:
                     # We want heat, but we aren't heating
-                    want_heat = self._virtual_target_temperature > (
-                        sensor_temp + tolerance
+                    want_heat = (
+                        self._virtual_target_temperature - sensor_temp
+                        >= OVERDRIVE_MINIMUM_ERROR
                     )
-                    not_heating = real_action != HVACAction.HEATING
+                    if real_action is None:
+                        not_heating = normal_real_target <= real_current
+                    else:
+                        not_heating = real_action != HVACAction.HEATING
                     if want_heat and not_heating:
                         overdrive_active = True
                         # Push target up to force start
@@ -1824,10 +1833,14 @@ class CustomThermostatEntity(RestoreEntity, ClimateEntity):
                 # Cool Mode Stall
                 elif self.hvac_mode == HVACMode.COOL:
                     # We want cool, but we aren't cooling
-                    want_cool = self._virtual_target_temperature < (
-                        sensor_temp - tolerance
+                    want_cool = (
+                        sensor_temp - self._virtual_target_temperature
+                        >= OVERDRIVE_MINIMUM_ERROR
                     )
-                    not_cooling = real_action != HVACAction.COOLING
+                    if real_action is None:
+                        not_cooling = normal_real_target >= real_current
+                    else:
+                        not_cooling = real_action != HVACAction.COOLING
                     if want_cool and not_cooling:
                         overdrive_active = True
                         # Push target down to force start
@@ -1840,10 +1853,13 @@ class CustomThermostatEntity(RestoreEntity, ClimateEntity):
             if overdrive_active:
                 calculated_real_target = calculated_real_target + overdrive_adjust
 
-            desired_real_target = self._apply_safety_clamp(calculated_real_target)
-            if desired_real_target is None:
-                return
-            desired_real_target = self._apply_target_constraints(desired_real_target)
+            desired_real_target = (
+                self._apply_target_constraints(
+                    self._apply_safety_clamp(calculated_real_target)
+                )
+                if overdrive_active
+                else normal_real_target
+            )
 
             current_real_target = self._get_real_target_temperature()
             # We must be strict here; if the step is 1.0, 66 vs 67 must be seen as different.

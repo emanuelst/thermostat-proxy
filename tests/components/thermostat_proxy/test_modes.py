@@ -122,6 +122,56 @@ async def test_overdrive_cool(mock_hass):
 
 
 @pytest.mark.asyncio
+async def test_small_sensor_error_does_not_trigger_overdrive(mock_hass):
+    """Test that normal sensor noise cannot trigger a full-degree overdrive."""
+    proxy = create_proxy(mock_hass)
+    proxy._real_state = State(
+        "climate.real",
+        HVACMode.COOL,
+        {
+            "current_temperature": 24.0,
+            "temperature": 24.0,
+            "hvac_action": "idle",
+            "target_temp_step": 0.5,
+            "supported_features": ClimateEntityFeature.TARGET_TEMPERATURE,
+        },
+    )
+    proxy._update_real_temperature_limits()
+    proxy._virtual_target_temperature = 24.0
+    proxy._sensor_states["sensor.remote"] = State("sensor.remote", "24.2")
+
+    await proxy._async_realign_real_target_from_sensor()
+
+    assert not mock_hass.services.async_call.called
+
+
+@pytest.mark.asyncio
+async def test_missing_hvac_action_uses_normal_target_as_stall_signal(mock_hass):
+    """Test that a missing action does not force overdrive unnecessarily."""
+    proxy = create_proxy(mock_hass)
+    proxy._real_state = State(
+        "climate.real",
+        HVACMode.COOL,
+        {
+            "current_temperature": 24.0,
+            "temperature": 24.0,
+            "target_temp_step": 0.5,
+            "supported_features": ClimateEntityFeature.TARGET_TEMPERATURE,
+        },
+    )
+    proxy._update_real_temperature_limits()
+    proxy._virtual_target_temperature = 22.5
+    proxy._sensor_states["sensor.remote"] = State("sensor.remote", "24.8")
+
+    await proxy._async_realign_real_target_from_sensor()
+
+    args, kwargs = mock_hass.services.async_call.call_args
+    assert args[0] == "climate"
+    assert args[1] == "set_temperature"
+    assert args[2]["temperature"] == 21.5
+
+
+@pytest.mark.asyncio
 async def test_cool_mode_target_temperature_on_range_capable_thermostat(mock_hass):
     """Test that COOL mode presents single target_temperature on a dual-setpoint capable thermostat."""
     proxy = create_proxy(mock_hass)

@@ -78,8 +78,8 @@ async def test_async_setup_entry_wiring(hass: HomeAssistant) -> None:
 
 @pytest.mark.parametrize("mode", ["heat", "cool"])
 @pytest.mark.asyncio
-async def test_external_change_real_flow(hass: HomeAssistant, mode: str) -> None:
-    """Test that a 1-degree change on the physical thermostat is correctly detected and shifts the proxy target by 1 degree across single-target modes."""
+async def test_external_change_preserves_virtual_target(hass: HomeAssistant, mode: str) -> None:
+    """Test that the selected remote sensor keeps ownership of the target."""
     # First, mock the states in the state machine
     hass.states.async_set(
         "climate.real",
@@ -145,6 +145,6 @@ async def test_external_change_real_flow(hass: HomeAssistant, mode: str) -> None
     )
     await hass.async_block_till_done()
 
-    # The virtual target should also decrease by 1 degree: 26.0 -> 25.0
+    # The physical report must not rewrite the virtual comfort target.
     proxy_state = hass.states.get("climate.thermostat_proxy")
-    assert proxy_state.attributes["temperature"] == 25.0
+    assert proxy_state.attributes["temperature"] == 26.0

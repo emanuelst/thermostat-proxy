@@ -70,8 +70,8 @@ async def test_infer_sensor_precision(mock_hass):
 
 
 @pytest.mark.asyncio
-async def test_effective_precision_coarsest_wins(mock_hass):
-    """Test that precision and target_temp_step use the coarsest available."""
+async def test_sensor_precision_does_not_coarsen_target_step(mock_hass):
+    """Test that sensor formatting cannot remove physical half-degree targets."""
     proxy = create_proxy(mock_hass, target_temp_step=0.5)
 
     # Sensor 1 reports 1.0 precision
@@ -85,9 +85,10 @@ async def test_effective_precision_coarsest_wins(mock_hass):
     )
     proxy._selected_sensor_name = "Sensor 1"
 
-    # Thermostat is 0.5, Sensor is 1.0 -> Effective is 1.0
-    assert proxy.precision == 1.0
-    assert proxy.target_temperature_step == 1.0
+    # Thermostat is 0.5, Sensor is whole degrees -> target remains 0.5.
+    assert proxy.precision == 0.5
+    assert proxy.target_temperature_step == 0.5
+    assert proxy._apply_target_constraints(23.5) == 23.5
 
     # Switch to high precision sensor
     proxy._sensor_states["sensor.1"] = State("sensor.1", "22.85")
@@ -95,9 +96,27 @@ async def test_effective_precision_coarsest_wins(mock_hass):
         State("sensor.1", "22.85")
     )
 
-    # Thermostat is 0.5, Sensor is 0.01 -> Display precision is 0.01, target step is 0.5
-    assert proxy.precision == 0.01
+    # Thermostat is 0.5, Sensor has extra decimals -> display uses supported
+    # tenths, while target step remains the physical 0.5.
+    assert proxy.precision == 0.1
     assert proxy.target_temperature_step == 0.5
+
+
+@pytest.mark.asyncio
+async def test_float_artifact_does_not_round_half_degree_target(mock_hass):
+    """Test that a noisy sensor state cannot make 23.5 display as 24."""
+    proxy = create_proxy(mock_hass, target_temp_step=0.5)
+    noisy_state = State("sensor.1", "23.2000007629395")
+    mock_hass.states.get.side_effect = lambda entity_id: (
+        noisy_state if entity_id == "sensor.1" else proxy._real_state
+    )
+    proxy._sensor_states["sensor.1"] = noisy_state
+    proxy._sensor_precisions["sensor.1"] = proxy._infer_sensor_precision(noisy_state)
+    proxy._selected_sensor_name = "Sensor 1"
+
+    assert proxy.target_temperature_step == 0.5
+    assert proxy.precision == 0.1
+    assert proxy._apply_target_constraints(23.5) == 23.5
 
 
 @pytest.mark.asyncio
@@ -121,7 +140,7 @@ async def test_pending_request_tolerance_covers_step(mock_hass):
     """Test that _pending_request_tolerance does not incorrectly incorporate target_temp_step to avoid ignoring manual changes."""
     proxy = create_proxy(mock_hass, target_temp_step=0.5)
     proxy._sensor_precisions["sensor.1"] = 0.5
-    # With 0.5 precision, precision / 2 is 0.25.
-    # It should not use step (0.5), so tolerance should be 0.25.
+    # Display precision is normalized to 0.1, so strict response matching uses
+    # 0.05 and cannot swallow a genuine half-degree external change.
     tolerance = proxy._pending_request_tolerance()
-    assert tolerance == 0.25
+    assert tolerance == 0.05

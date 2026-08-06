@@ -96,31 +96,30 @@ async def test_auto_switch_enabled(mock_hass, hvac_mode):
 )
 @pytest.mark.asyncio
 async def test_auto_switch_disabled(mock_hass, hvac_mode):
-    """Test that proxy maintains sensor and updates virtual targets when auto-switch is disabled across all modes."""
+    """Test that the remote sensor and its virtual targets remain authoritative."""
     proxy = create_proxy(mock_hass, disable_auto_switch=True, hvac_mode=hvac_mode)
 
     if hvac_mode in (HVACMode.HEAT_COOL, HVACMode.AUTO):
         proxy._detect_external_dual_target_change(20.0, 24.0, was_not_controlling=False)
         assert proxy._selected_sensor_name == "Remote"
-        # Real low changed +2.0 (18.0 -> 20.0), virtual low 18.0 + 2.0 = 20.0
-        assert proxy._virtual_target_temperature_low == 20.0
+        assert proxy._virtual_target_temperature_low == 18.0
+        assert proxy._virtual_target_temperature_high == 24.0
     else:
         proxy._handle_external_real_target_change(24.0, 22.0)
         assert proxy._selected_sensor_name == "Remote"
-        # Virtual target updated by delta: 26.0 + (24.0 - 22.0) = 28.0
-        assert proxy._virtual_target_temperature == 28.0
+        assert proxy._virtual_target_temperature == 26.0
 
 
 @pytest.mark.asyncio
-async def test_external_change_updates_last_real_write_time(mock_hass):
-    """Test that handling an external change when auto-switch is disabled updates _last_real_write_time."""
+async def test_ignored_external_change_is_not_recorded_as_proxy_write(mock_hass):
+    """Test that an external report cannot alter proxy ownership state."""
     proxy = create_proxy(mock_hass, disable_auto_switch=True, hvac_mode=HVACMode.COOL)
     initial_write_time = proxy._last_real_write_time
 
     proxy._handle_external_real_target_change(21.0, 22.0)
 
-    assert proxy._virtual_target_temperature == 25.0
-    assert proxy._last_real_write_time > initial_write_time
+    assert proxy._virtual_target_temperature == 26.0
+    assert proxy._last_real_write_time == initial_write_time
 
 
 @pytest.mark.asyncio

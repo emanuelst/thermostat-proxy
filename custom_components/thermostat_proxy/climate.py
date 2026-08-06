@@ -2632,6 +2632,8 @@ class CustomThermostatEntity(RestoreEntity, ClimateEntity):
 
     @property
     def swing_mode(self) -> str | None:
+        # Daikin Onecta labels reference:
+        # https://github.com/jwillemsen/daikin_onecta
         """Return the physical thermostat's vertical swing setting."""
         if self._real_state:
             return self._real_state.attributes.get("swing_mode")

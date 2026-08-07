@@ -70,11 +70,11 @@ async def test_infer_sensor_precision(mock_hass):
 
 
 @pytest.mark.asyncio
-async def test_effective_precision_coarsest_wins(mock_hass):
-    """Test that precision and target_temp_step use the coarsest available."""
+async def test_precision_and_step_handling(mock_hass):
+    """Test that precision and target_temp_step handle coarse and fine sensors correctly."""
     proxy = create_proxy(mock_hass, target_temp_step=0.5)
 
-    # Sensor 1 reports 1.0 precision
+    # Sensor 1 reports 1.0 precision (coarse)
     mock_hass.states.get.side_effect = lambda entity_id: (
         State(entity_id, "22") if entity_id == "sensor.1" else proxy._real_state
     )
@@ -85,18 +85,21 @@ async def test_effective_precision_coarsest_wins(mock_hass):
     )
     proxy._selected_sensor_name = "Sensor 1"
 
-    # Thermostat is 0.5, Sensor is 1.0 -> Effective is 1.0
-    assert proxy.precision == 1.0
-    assert proxy.target_temperature_step == 1.0
+    # Thermostat step is 0.5. Even with coarse sensor (1.0), we preserve half-degree targets.
+    # Display precision also correctly snaps to 0.5 instead of losing half-degree display.
+    assert proxy.precision == 0.5
+    assert proxy.target_temperature_step == 0.5
 
-    # Switch to high precision sensor
+    # Switch to high precision sensor (0.01)
     proxy._sensor_states["sensor.1"] = State("sensor.1", "22.85")
     proxy._sensor_precisions["sensor.1"] = proxy._infer_sensor_precision(
         State("sensor.1", "22.85")
     )
 
-    # Thermostat is 0.5, Sensor is 0.01 -> Display precision is 0.01, target step is 0.5
-    assert proxy.precision == 0.01
+    # Thermostat is 0.5, Sensor inferred is 0.01.
+    # Sensor display precision caps at 0.1 (DEFAULT_PRECISION). min(0.5, 0.1) -> 0.1
+    # Target step stays 0.5.
+    assert proxy.precision == 0.1
     assert proxy.target_temperature_step == 0.5
 
 
@@ -120,8 +123,9 @@ async def test_log_formatting_preserves_decimals(mock_hass):
 async def test_pending_request_tolerance_covers_step(mock_hass):
     """Test that _pending_request_tolerance does not incorrectly incorporate target_temp_step to avoid ignoring manual changes."""
     proxy = create_proxy(mock_hass, target_temp_step=0.5)
-    proxy._sensor_precisions["sensor.1"] = 0.5
-    # With 0.5 precision, precision / 2 is 0.25.
-    # It should not use step (0.5), so tolerance should be 0.25.
+    proxy._sensor_precisions["sensor.1"] = 1.0
+    # With coarse sensor (1.0), precision resolves to 0.5 (min of step and sensor).
+    # precision / 2 is 0.25.
+    # It should not use step (0.5) directly to increase tolerance, so tolerance should be 0.25.
     tolerance = proxy._pending_request_tolerance()
     assert tolerance == 0.25

@@ -24,9 +24,10 @@ A Home Assistant custom integration that lets you expose a virtual `climate` ent
 - If someone changes the physical thermostat directly, the proxy automatically switches to the physical preset and logs the change in Home Assistant's logbook.
 - **Overdrive** logic: If the remote sensor hasn't reached the target but the physical thermostat thinks it's done (e.g. goes "Idle"), the proxy will temporarily offset the real target by an additional degree to force the HVAC to keep running until the remote sensor is satisfied.
 - **Auto & Heat-Cool Mode Support**: Fully supports dual-setpoint modes (`HEAT_COOL` and `AUTO`) with remote sensors. The proxy automatically calculates independent high and low setpoint offsets to regulate both heating and cooling at the remote sensor's location.
-- **Fan Mode Support**: Fully proxies the real thermostat's fan modes. You can control the fan (Auto/On/Low/etc.) seamlessly through the proxy entity.
+- **Fan & Swing Mode Support**: Fully proxies the real thermostat's fan and swing modes. You can control the fan (Auto/On/Low/etc.) and swing directions seamlessly through the proxy entity.
 - **User Log Attribution**: Logbook entries for target temperature or preset changes will show which user performed the action.
 - **Safety Limits**: Configure custom `min_temp` and `max_temp` bounds. Calculated targets are clamped to these limits to prevent extreme requests due to sensor anomalies or to respect operational restrictions enforced by certain thermostats that aren't exposed through their Home Assistant attributes.
+- **Hardware-Accurate Control Resolution**: Automatically detects the exact precision of your physical thermostat (e.g., 0.5°) and preserves it when setting target temperatures, regardless of whether your selected remote sensor reports coarse, whole-degree values.
 - **Sensor Change Threshold**: Configurable `sensor_change_threshold` (e.g. 0.5°) to prevent equipment short-cycling by filtering minor sensor fluctuations, while always overriding the threshold when the remote sensor reaches or crosses the target temperature.
 - Default sensor selector includes a "Last active sensor" option (during setup or in options) so the proxy resumes with the most recently selected sensor instead of the configured default.
 
@@ -142,7 +143,7 @@ mode: single
 - **Disable built-in Comfort/Eco/Schedule modes**: Disable any comfort modes, eco modes, follow me, or schedules configured directly on the physical thermostat (or via its proprietary app/integration). Because these modes change the target temperature setpoints outside of this integration, they will cause the proxy to detect a manual change and automatically fall back to the `Physical Entity` preset.
 - If you pick a specific default sensor instead of "Last active sensor", the proxy will fall back to that default after a restart even if you had switched to a different preset earlier.
 - This integration does not use humidity data for its core logic (e.g., temperature control), but it does expose the underlying thermostat's humidity reading as a real_current_humidity attribute for visibility.
-- **Dynamic Precision**: The proxy automatically determines the target step size and display precision by taking the *coarsest* resolution between your physical thermostat and the currently active remote sensor. For example, if your physical thermostat steps by 0.5° but your active remote sensor only reports in whole degrees (1.0° precision), the proxy will only allow you to set targets in 1.0° increments while that sensor is active. Switching to a higher-precision sensor will dynamically restore the finer stepping.
+
 
 ## Contributing
 

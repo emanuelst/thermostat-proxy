@@ -123,8 +123,9 @@ async def test_log_formatting_preserves_decimals(mock_hass):
 async def test_pending_request_tolerance_covers_step(mock_hass):
     """Test that _pending_request_tolerance does not incorrectly incorporate target_temp_step to avoid ignoring manual changes."""
     proxy = create_proxy(mock_hass, target_temp_step=0.5)
-    proxy._sensor_precisions["sensor.1"] = 0.5
-    # With 0.5 precision, precision / 2 is 0.25.
-    # It should not use step (0.5), so tolerance should be 0.25.
+    proxy._sensor_precisions["sensor.1"] = 1.0
+    # With coarse sensor (1.0), precision resolves to 0.5 (min of step and sensor).
+    # precision / 2 is 0.25.
+    # It should not use step (0.5) directly to increase tolerance, so tolerance should be 0.25.
     tolerance = proxy._pending_request_tolerance()
     assert tolerance == 0.25

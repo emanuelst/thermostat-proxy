@@ -391,6 +391,8 @@ class CustomThermostatEntity(RestoreEntity, ClimateEntity):
         self._realign_trigger_source: str | None = None
         self._cooldown_timer_unsub: Callable[[], None] | None = None
         self._sensor_precisions: dict[str, float] = {}
+        self._active_overdrive_heat: bool = False
+        self._active_overdrive_cool: bool = False
 
     def _log_debug(self, msg: str, *args: Any) -> None:
         """Log diagnostic information."""
@@ -1252,6 +1254,10 @@ class CustomThermostatEntity(RestoreEntity, ClimateEntity):
 
     async def async_set_temperature(self, **kwargs: Any) -> None:
         async with self._command_lock:
+            # Reset overdrive state on manual temperature change
+            self._active_overdrive_heat = False
+            self._active_overdrive_cool = False
+
             # Handle dual setpoints for range-based modes (Auto/Heat-Cool)
             high = kwargs.get(ATTR_TARGET_TEMP_HIGH)
             low = kwargs.get(ATTR_TARGET_TEMP_LOW)
@@ -1420,6 +1426,10 @@ class CustomThermostatEntity(RestoreEntity, ClimateEntity):
 
     async def async_set_hvac_mode(self, hvac_mode: HVACMode) -> None:
         self._log_debug("async_set_hvac_mode called with mode: %s", hvac_mode)
+        # Reset overdrive state on mode change
+        self._active_overdrive_heat = False
+        self._active_overdrive_cool = False
+
         await self.hass.services.async_call(
             CLIMATE_DOMAIN,
             SERVICE_SET_HVAC_MODE,
@@ -1838,15 +1848,19 @@ class CustomThermostatEntity(RestoreEntity, ClimateEntity):
             if self._real_state and self.hvac_mode in (HVACMode.HEAT, HVACMode.COOL):
                 real_action = self._real_state.attributes.get(ATTR_HVAC_ACTION)
                 tolerance = max(self.precision or DEFAULT_PRECISION, 0.1)
+                deadband = max(tolerance, self._sensor_change_threshold)
 
                 # Heat Mode Stall
                 if self.hvac_mode == HVACMode.HEAT:
-                    # We want heat, but we aren't heating
-                    want_heat = self._virtual_target_temperature > (
-                        sensor_temp + tolerance
-                    )
+                    # Hysteresis: start when exceeding deadband, maintain until target met
+                    if not self._active_overdrive_heat:
+                        want_heat = self._virtual_target_temperature > (sensor_temp + deadband)
+                    else:
+                        want_heat = self._virtual_target_temperature > (sensor_temp + tolerance)
+                        
                     not_heating = real_action != HVACAction.HEATING
-                    if want_heat and not_heating:
+                    if want_heat and (not_heating or self._active_overdrive_heat):
+                        self._active_overdrive_heat = True
                         overdrive_active = True
                         # Push target up to force start
                         overdrive_adjust = (
@@ -1856,15 +1870,20 @@ class CustomThermostatEntity(RestoreEntity, ClimateEntity):
                             "Overdrive active: Heating required but thermostat idle. Applying +%s offset.",
                             overdrive_adjust,
                         )
+                    else:
+                        self._active_overdrive_heat = False
 
                 # Cool Mode Stall
                 elif self.hvac_mode == HVACMode.COOL:
-                    # We want cool, but we aren't cooling
-                    want_cool = self._virtual_target_temperature < (
-                        sensor_temp - tolerance
-                    )
+                    # Hysteresis: start when exceeding deadband, maintain until target met
+                    if not self._active_overdrive_cool:
+                        want_cool = self._virtual_target_temperature < (sensor_temp - deadband)
+                    else:
+                        want_cool = self._virtual_target_temperature < (sensor_temp - tolerance)
+
                     not_cooling = real_action != HVACAction.COOLING
-                    if want_cool and not_cooling:
+                    if want_cool and (not_cooling or self._active_overdrive_cool):
+                        self._active_overdrive_cool = True
                         overdrive_active = True
                         # Push target down to force start
                         overdrive_adjust = OVERDRIVE_ADJUSTMENT_COOL
@@ -1872,6 +1891,8 @@ class CustomThermostatEntity(RestoreEntity, ClimateEntity):
                             "Overdrive active: Cooling required but thermostat idle. Applying %s offset.",
                             overdrive_adjust,
                         )
+                    else:
+                        self._active_overdrive_cool = False
 
             if overdrive_active:
                 calculated_real_target = calculated_real_target + overdrive_adjust
@@ -2001,36 +2022,47 @@ class CustomThermostatEntity(RestoreEntity, ClimateEntity):
         ):
             real_action = self._real_state.attributes.get(ATTR_HVAC_ACTION)
             tolerance = max(self.precision or DEFAULT_PRECISION, 0.1)
+            deadband = max(tolerance, self._sensor_change_threshold)
 
             if (
                 self._virtual_target_temperature_low is not None
                 and calculated_real_low is not None
             ):
-                want_heat = sensor_temp < (
-                    self._virtual_target_temperature_low - tolerance
-                )
+                if not self._active_overdrive_heat:
+                    want_heat = sensor_temp < (self._virtual_target_temperature_low - deadband)
+                else:
+                    want_heat = sensor_temp < (self._virtual_target_temperature_low - tolerance)
+                    
                 not_heating = real_action != HVACAction.HEATING
-                if want_heat and not_heating:
+                if want_heat and (not_heating or self._active_overdrive_heat):
+                    self._active_overdrive_heat = True
                     overdrive_adjust_low = OVERDRIVE_ADJUSTMENT_HEAT
                     _LOGGER.info(
                         "Overdrive active (dual low): Heating required but thermostat idle. Applying +%s offset.",
                         overdrive_adjust_low,
                     )
+                else:
+                    self._active_overdrive_heat = False
 
             if (
                 self._virtual_target_temperature_high is not None
                 and calculated_real_high is not None
             ):
-                want_cool = sensor_temp > (
-                    self._virtual_target_temperature_high + tolerance
-                )
+                if not self._active_overdrive_cool:
+                    want_cool = sensor_temp > (self._virtual_target_temperature_high + deadband)
+                else:
+                    want_cool = sensor_temp > (self._virtual_target_temperature_high + tolerance)
+                    
                 not_cooling = real_action != HVACAction.COOLING
-                if want_cool and not_cooling:
+                if want_cool and (not_cooling or self._active_overdrive_cool):
+                    self._active_overdrive_cool = True
                     overdrive_adjust_high = OVERDRIVE_ADJUSTMENT_COOL
                     _LOGGER.info(
                         "Overdrive active (dual high): Cooling required but thermostat idle. Applying %s offset.",
                         overdrive_adjust_high,
                     )
+                else:
+                    self._active_overdrive_cool = False
 
         if calculated_real_low is not None and overdrive_adjust_low != 0.0:
             calculated_real_low += overdrive_adjust_low

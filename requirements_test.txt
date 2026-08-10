@@ -1,0 +1,10 @@
+pytest-homeassistant-custom-component
+pytest
+pytest-asyncio
+pytest-cov
+pytest-timeout
+ruff
+mypy
+black
+flake8
+tox

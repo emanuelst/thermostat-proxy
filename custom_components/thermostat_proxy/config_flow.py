@@ -531,7 +531,7 @@ class CustomThermostatConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         self.hass.config_entries.async_update_entry(
                             self._reconfigure_entry, title=data[CONF_NAME]
                         )
-                    return self.async_update_and_abort(
+                    return self.async_update_reload_and_abort(
                         self._reconfigure_entry,
                         data=data,
                         options=options,

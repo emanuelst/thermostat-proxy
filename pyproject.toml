@@ -1,0 +1,41 @@
+[tool.coverage.report]
+show_missing = true
+fail_under = 80
+
+[tool.mypy]
+platform = "linux"
+python_version = "3.11"
+follow_imports = "silent"
+ignore_missing_imports = true
+check_untyped_defs = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+norecursedirs = [".git"]
+log_format = "%(asctime)s.%(msecs)03d %(levelname)-8s %(threadName)s %(name)s:%(filename)s:%(lineno)s %(message)s"
+log_date_format = "%Y-%m-%d %H:%M:%S"
+log_cli = false
+log_level = "DEBUG"
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+timeout = 30
+addopts = "--cov=custom_components/thermostat_proxy --cov-report=xml"
+
+[tool.ruff]
+line-length = 88
+indent-width = 4
+target-version = "py310"
+
+[tool.ruff.lint]
+select = [
+  "E", "F", "W", "I", "B", "C4", "SIM", "RUF"
+]
+ignore = [
+  "E501"
+]
+
+[tool.ruff.lint.isort]
+force-sort-within-sections = true
+known-first-party = ["homeassistant", "custom_components"]
+combine-as-imports = true
+split-on-trailing-comma = false

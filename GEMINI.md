@@ -35,12 +35,11 @@ The project follows the standard Home Assistant custom component structure:
 
 **External References:**
 - `icons/`: Drop new assets here for HACS bundling.
-- `tmp_better_thermostat/`: Read-only upstream reference used for comparisons. Keep its history separate.
 
 ## Build, Test, and Development Commands
 
 1. `python3 -m venv .venv && source .venv/bin/activate` — Create an isolated environment.
-2. `pip install -r tmp_better_thermostat/requirements.dev.txt` — Install Home Assistant and linting tools.
+2. `pip install -r requirements_test.txt` — Install Home Assistant and linting tools.
 3. `ruff check custom_components/thermostat_proxy` — Static analysis aligned with HA guidance.
 4. `black custom_components/thermostat_proxy` — Enforce 88-character formatting.
 5. `codespell custom_components/thermostat_proxy README.md` — Catch typos.

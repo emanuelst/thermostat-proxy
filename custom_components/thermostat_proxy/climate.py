@@ -734,34 +734,11 @@ class CustomThermostatEntity(RestoreEntity, ClimateEntity):
             self._disable_auto_switch
             and self._selected_sensor_name != self._physical_sensor_name
         ):
-            if (
-                previous_real_target is not None
-                and self._virtual_target_temperature is not None
-            ):
-                delta = real_target - previous_real_target
-                derived = self._virtual_target_temperature + delta
-                new_virtual = self._apply_target_constraints(derived)
-                if new_virtual is not None:
-                    tolerance = (self.precision or DEFAULT_PRECISION) * 0.5
-                    if not math.isclose(
-                        self._virtual_target_temperature, new_virtual, abs_tol=tolerance
-                    ):
-                        self.hass.async_create_task(
-                            self._async_log_virtual_target_sync(
-                                new_virtual,
-                                real_target,
-                                previous_real_target=previous_real_target,
-                            )
-                        )
-                        self._virtual_target_temperature = new_virtual
-                        self._last_real_write_time = time.monotonic()
-                        self.async_write_ha_state()
-            else:
-                self._log_debug(
-                    "Skipping external change delta: previous_real_target=%s, virtual_target=%s",
-                    previous_real_target,
-                    self._virtual_target_temperature,
-                )
+            self._log_debug(
+                "Ignoring external real target change while remote sensor owns the virtual target: %s -> %s",
+                previous_real_target,
+                real_target,
+            )
             return
 
         self._virtual_target_temperature = self._apply_target_constraints(real_target)
@@ -839,22 +816,9 @@ class CustomThermostatEntity(RestoreEntity, ClimateEntity):
             self._disable_auto_switch
             and self._selected_sensor_name != self._physical_sensor_name
         ):
-            if low_changed and previous_low is not None and real_low is not None:
-                delta = real_low - previous_low
-                if self._virtual_target_temperature_low is not None:
-                    derived = self._virtual_target_temperature_low + delta
-                    new_low = self._apply_target_constraints(derived)
-                    if new_low is not None:
-                        self._virtual_target_temperature_low = new_low
-            if high_changed and previous_high is not None and real_high is not None:
-                delta = real_high - previous_high
-                if self._virtual_target_temperature_high is not None:
-                    derived = self._virtual_target_temperature_high + delta
-                    new_high = self._apply_target_constraints(derived)
-                    if new_high is not None:
-                        self._virtual_target_temperature_high = new_high
-            self._last_real_write_time = time.monotonic()
-            self.async_write_ha_state()
+            self._log_debug(
+                "Ignoring external dual target change while remote sensor owns the virtual targets"
+            )
             return
 
         if real_low is not None:

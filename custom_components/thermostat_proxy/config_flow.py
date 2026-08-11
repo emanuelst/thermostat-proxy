@@ -33,6 +33,8 @@ from .const import (
     DEFAULT_MAX_SYNC_OFFSET,
     CONF_DISABLE_AUTO_SWITCH,
     DEFAULT_DISABLE_AUTO_SWITCH,
+    CONF_PRESERVE_VIRTUAL_TARGET,
+    DEFAULT_PRESERVE_VIRTUAL_TARGET,
     CONF_SENSOR_CHANGE_THRESHOLD,
     DEFAULT_SENSOR_CHANGE_THRESHOLD,
 )
@@ -77,6 +79,7 @@ class CustomThermostatConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self._max_temp: float | None = None
         self._max_sync_offset: float | None = None
         self._disable_auto_switch: bool = DEFAULT_DISABLE_AUTO_SWITCH
+        self._preserve_virtual_target: bool = DEFAULT_PRESERVE_VIRTUAL_TARGET
         self._sensor_change_threshold: float = DEFAULT_SENSOR_CHANGE_THRESHOLD
         self._reconfigure_entry: config_entries.ConfigEntry | None = None
         self._replace_target: str | None = None
@@ -150,6 +153,9 @@ class CustomThermostatConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self._max_sync_offset = entry.data.get(CONF_MAX_SYNC_OFFSET)
         self._disable_auto_switch = entry.data.get(
             CONF_DISABLE_AUTO_SWITCH, DEFAULT_DISABLE_AUTO_SWITCH
+        )
+        self._preserve_virtual_target = entry.data.get(
+            CONF_PRESERVE_VIRTUAL_TARGET, DEFAULT_PRESERVE_VIRTUAL_TARGET
         )
         self._sensor_change_threshold = entry.data.get(
             CONF_SENSOR_CHANGE_THRESHOLD, DEFAULT_SENSOR_CHANGE_THRESHOLD
@@ -450,6 +456,9 @@ class CustomThermostatConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             disable_auto_switch = user_input.get(
                 CONF_DISABLE_AUTO_SWITCH, DEFAULT_DISABLE_AUTO_SWITCH
             )
+            preserve_virtual_target = user_input.get(
+                CONF_PRESERVE_VIRTUAL_TARGET, DEFAULT_PRESERVE_VIRTUAL_TARGET
+            )
             sensor_change_threshold = (
                 user_input.get(
                     CONF_SENSOR_CHANGE_THRESHOLD, DEFAULT_SENSOR_CHANGE_THRESHOLD
@@ -488,6 +497,7 @@ class CustomThermostatConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 self._max_temp = max_temp
                 self._max_sync_offset = max_sync_offset
                 self._disable_auto_switch = disable_auto_switch
+                self._preserve_virtual_target = preserve_virtual_target
                 self._sensor_change_threshold = sensor_change_threshold
                 self._use_last_active_sensor = use_last_active_sensor
 
@@ -505,6 +515,7 @@ class CustomThermostatConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     CONF_MAX_TEMP: max_temp,
                     CONF_MAX_SYNC_OFFSET: max_sync_offset,
                     CONF_DISABLE_AUTO_SWITCH: disable_auto_switch,
+                    CONF_PRESERVE_VIRTUAL_TARGET: preserve_virtual_target,
                     CONF_SENSOR_CHANGE_THRESHOLD: sensor_change_threshold,
                 }
                 if self._use_last_active_sensor:
@@ -521,6 +532,7 @@ class CustomThermostatConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         CONF_MAX_TEMP,
                         CONF_MAX_SYNC_OFFSET,
                         CONF_DISABLE_AUTO_SWITCH,
+                        CONF_PRESERVE_VIRTUAL_TARGET,
                         CONF_SENSOR_CHANGE_THRESHOLD,
                         CONF_USE_LAST_ACTIVE_SENSOR,
                     ):
@@ -618,6 +630,12 @@ class CustomThermostatConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         schema_fields[
             vol.Optional(CONF_DISABLE_AUTO_SWITCH, default=self._disable_auto_switch)
         ] = selector.BooleanSelector()
+        schema_fields[
+            vol.Optional(
+                CONF_PRESERVE_VIRTUAL_TARGET,
+                default=self._preserve_virtual_target,
+            )
+        ] = selector.BooleanSelector()
 
         data_schema = vol.Schema(schema_fields)
 
@@ -696,6 +714,12 @@ class CustomThermostatOptionsFlowHandler(config_entries.OptionsFlow):
                 CONF_DISABLE_AUTO_SWITCH, DEFAULT_DISABLE_AUTO_SWITCH
             ),
         )
+        current_preserve_virtual_target = self.config_entry.options.get(
+            CONF_PRESERVE_VIRTUAL_TARGET,
+            self.config_entry.data.get(
+                CONF_PRESERVE_VIRTUAL_TARGET, DEFAULT_PRESERVE_VIRTUAL_TARGET
+            ),
+        )
         current_sensor_change_threshold = self.config_entry.options.get(
             CONF_SENSOR_CHANGE_THRESHOLD,
             self.config_entry.data.get(
@@ -715,6 +739,9 @@ class CustomThermostatOptionsFlowHandler(config_entries.OptionsFlow):
             max_sync_offset = user_input.get(CONF_MAX_SYNC_OFFSET) or None
             disable_auto_switch = user_input.get(
                 CONF_DISABLE_AUTO_SWITCH, DEFAULT_DISABLE_AUTO_SWITCH
+            )
+            preserve_virtual_target = user_input.get(
+                CONF_PRESERVE_VIRTUAL_TARGET, DEFAULT_PRESERVE_VIRTUAL_TARGET
             )
             sensor_change_threshold = (
                 user_input.get(
@@ -748,6 +775,7 @@ class CustomThermostatOptionsFlowHandler(config_entries.OptionsFlow):
                 data[CONF_MAX_TEMP] = max_temp
                 data[CONF_MAX_SYNC_OFFSET] = max_sync_offset
                 data[CONF_DISABLE_AUTO_SWITCH] = disable_auto_switch
+                data[CONF_PRESERVE_VIRTUAL_TARGET] = preserve_virtual_target
                 data[CONF_SENSOR_CHANGE_THRESHOLD] = sensor_change_threshold
 
                 return self.async_create_entry(title="", data=data)
@@ -826,6 +854,12 @@ class CustomThermostatOptionsFlowHandler(config_entries.OptionsFlow):
         ] = threshold_selector
         schema_fields[
             vol.Optional(CONF_DISABLE_AUTO_SWITCH, default=current_disable_auto_switch)
+        ] = selector.BooleanSelector()
+        schema_fields[
+            vol.Optional(
+                CONF_PRESERVE_VIRTUAL_TARGET,
+                default=current_preserve_virtual_target,
+            )
         ] = selector.BooleanSelector()
 
         data_schema = vol.Schema(schema_fields)

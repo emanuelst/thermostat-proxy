@@ -89,6 +89,7 @@
           "max_temp": "Maximum safe temperature limit (set to 0 to disable)",
           "max_sync_offset": "Maximum allowed offset from target temperature (0 to disable, default 10.0)",
           "disable_auto_switch": "Disable auto-switch to physical sensor",
+          "preserve_virtual_target": "Prevent physical target changes from overriding the virtual target",
           "sensor_change_threshold": "Sensor change threshold (degrees before updating physical thermostat, 0 to disable, default 0.0)"
         }
       }
@@ -119,6 +120,7 @@
           "max_temp": "Maximum safe temperature limit (set to 0 to disable)",
           "max_sync_offset": "Maximum allowed offset from target temperature (0 to disable, default 10.0)",
           "disable_auto_switch": "Disable auto-switch to physical sensor",
+          "preserve_virtual_target": "Prevent physical target changes from overriding the virtual target",
           "sensor_change_threshold": "Sensor change threshold (degrees before updating physical thermostat, 0 to disable, default 0.0)"
         }
       }

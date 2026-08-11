@@ -23,7 +23,12 @@ CONF_MAX_TEMP = "max_temp"
 CONF_MAX_SYNC_OFFSET = "max_sync_offset"
 CONF_DISABLE_AUTO_SWITCH = "disable_auto_switch"
 CONF_PRESERVE_VIRTUAL_TARGET = "preserve_virtual_target"
+CONF_PHYSICAL_TARGET_CHANGE_BEHAVIOR = "physical_target_change_behavior"
 CONF_SENSOR_CHANGE_THRESHOLD = "sensor_change_threshold"
+
+TARGET_CHANGE_BEHAVIOR_AUTO_SWITCH = "auto_switch"
+TARGET_CHANGE_BEHAVIOR_DISABLE_AUTO_SWITCH = "disable_auto_switch"
+TARGET_CHANGE_BEHAVIOR_PRESERVE_VIRTUAL_TARGET = "preserve_virtual_target"
 
 DEFAULT_COOLDOWN_PERIOD = 0
 DEFAULT_MAX_SYNC_OFFSET = 10.0

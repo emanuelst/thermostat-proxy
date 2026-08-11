@@ -14,7 +14,14 @@ from custom_components.thermostat_proxy.const import (
     CONF_SENSORS,
     CONF_PHYSICAL_SENSOR_NAME,
     CONF_COOLDOWN_PERIOD,
-    CONF_PRESERVE_VIRTUAL_TARGET,
+    CONF_PHYSICAL_TARGET_CHANGE_BEHAVIOR,
+    TARGET_CHANGE_BEHAVIOR_PRESERVE_VIRTUAL_TARGET,
+    TARGET_CHANGE_BEHAVIOR_AUTO_SWITCH,
+    TARGET_CHANGE_BEHAVIOR_DISABLE_AUTO_SWITCH,
+)
+from custom_components.thermostat_proxy.config_flow import (
+    _target_change_behavior_from_flags,
+    _target_change_flags_from_behavior,
 )
 
 
@@ -23,6 +30,36 @@ def mock_services():
     """Mock service calls to avoid ServiceNotFound errors."""
     with patch("homeassistant.core.ServiceRegistry.async_call", return_value=True):
         yield
+
+
+@pytest.mark.parametrize(
+    (
+        "disable_auto_switch",
+        "preserve_virtual_target",
+        "behavior",
+        "mapped_flags",
+    ),
+    [
+        (False, False, TARGET_CHANGE_BEHAVIOR_AUTO_SWITCH, (False, False)),
+        (False, True, TARGET_CHANGE_BEHAVIOR_AUTO_SWITCH, (False, False)),
+        (True, False, TARGET_CHANGE_BEHAVIOR_DISABLE_AUTO_SWITCH, (True, False)),
+        (True, True, TARGET_CHANGE_BEHAVIOR_PRESERVE_VIRTUAL_TARGET, (True, True)),
+    ],
+)
+def test_target_change_behavior_legacy_mapping(
+    disable_auto_switch: bool,
+    preserve_virtual_target: bool,
+    behavior: str,
+    mapped_flags: tuple[bool, bool],
+) -> None:
+    """Test mapping between the UI behavior and legacy settings."""
+    assert (
+        _target_change_behavior_from_flags(
+            disable_auto_switch, preserve_virtual_target
+        )
+        == behavior
+    )
+    assert _target_change_flags_from_behavior(behavior) == mapped_flags
 
 
 @pytest.mark.asyncio
@@ -70,7 +107,9 @@ async def test_user_flow_success(hass: HomeAssistant) -> None:
         {
             "cooldown_period": 1800,
             "physical_sensor_name": "Physical",
-            "preserve_virtual_target": True,
+            CONF_PHYSICAL_TARGET_CHANGE_BEHAVIOR: (
+                TARGET_CHANGE_BEHAVIOR_PRESERVE_VIRTUAL_TARGET
+            ),
         },
     )
 
@@ -80,7 +119,8 @@ async def test_user_flow_success(hass: HomeAssistant) -> None:
     assert result["data"][CONF_SENSORS][0]["name"] == "Remote"
     assert result["data"][CONF_COOLDOWN_PERIOD] == 1800
     assert result["data"][CONF_PHYSICAL_SENSOR_NAME] == "Physical"
-    assert result["data"][CONF_PRESERVE_VIRTUAL_TARGET] is True
+    assert result["data"]["disable_auto_switch"] is True
+    assert result["data"]["preserve_virtual_target"] is True
 
 
 @pytest.mark.asyncio
@@ -111,14 +151,17 @@ async def test_options_flow(hass: HomeAssistant) -> None:
         user_input={
             "cooldown_period": 1800,
             "default_sensor": "Remote",
-            "preserve_virtual_target": True,
+            CONF_PHYSICAL_TARGET_CHANGE_BEHAVIOR: (
+                TARGET_CHANGE_BEHAVIOR_PRESERVE_VIRTUAL_TARGET
+            ),
         },
     )
 
     assert result["type"] == FlowResultType.CREATE_ENTRY
     assert result["data"]["cooldown_period"] == 1800
     assert result["data"]["default_sensor"] == "Remote"
-    assert result["data"][CONF_PRESERVE_VIRTUAL_TARGET] is True
+    assert result["data"]["disable_auto_switch"] is True
+    assert result["data"]["preserve_virtual_target"] is True
 
 
 @pytest.mark.asyncio

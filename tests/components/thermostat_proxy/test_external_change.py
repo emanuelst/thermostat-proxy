@@ -22,7 +22,12 @@ def mock_hass():
     return hass
 
 
-def create_proxy(hass, disable_auto_switch=False, hvac_mode=HVACMode.HEAT):
+def create_proxy(
+    hass,
+    disable_auto_switch=False,
+    preserve_virtual_target=False,
+    hvac_mode=HVACMode.HEAT,
+):
     """Helper to create a configured CustomThermostatEntity."""
     proxy = CustomThermostatEntity(
         hass=hass,
@@ -34,6 +39,7 @@ def create_proxy(hass, disable_auto_switch=False, hvac_mode=HVACMode.HEAT):
         physical_sensor_name="Physical",
         use_last_active_sensor=False,
         disable_auto_switch=disable_auto_switch,
+        preserve_virtual_target=preserve_virtual_target,
     )
 
     supported = (
@@ -121,6 +127,39 @@ async def test_external_change_updates_last_real_write_time(mock_hass):
 
     assert proxy._virtual_target_temperature == 25.0
     assert proxy._last_real_write_time > initial_write_time
+
+
+@pytest.mark.asyncio
+async def test_preserve_virtual_target_ignores_external_change(mock_hass):
+    """Test that the opt-in setting keeps the virtual target unchanged."""
+    proxy = create_proxy(
+        mock_hass,
+        disable_auto_switch=True,
+        preserve_virtual_target=True,
+        hvac_mode=HVACMode.COOL,
+    )
+
+    proxy._handle_external_real_target_change(21.0, 22.0)
+
+    assert proxy._selected_sensor_name == "Remote"
+    assert proxy._virtual_target_temperature == 26.0
+
+
+@pytest.mark.asyncio
+async def test_preserve_virtual_target_ignores_external_dual_change(mock_hass):
+    """Test that the opt-in setting keeps dual virtual targets unchanged."""
+    proxy = create_proxy(
+        mock_hass,
+        disable_auto_switch=True,
+        preserve_virtual_target=True,
+        hvac_mode=HVACMode.HEAT_COOL,
+    )
+
+    proxy._detect_external_dual_target_change(20.0, 25.0, was_not_controlling=False)
+
+    assert proxy._selected_sensor_name == "Remote"
+    assert proxy._virtual_target_temperature_low == 18.0
+    assert proxy._virtual_target_temperature_high == 24.0
 
 
 @pytest.mark.asyncio

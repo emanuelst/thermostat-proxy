@@ -14,6 +14,7 @@ from custom_components.thermostat_proxy.const import (
     CONF_SENSORS,
     CONF_PHYSICAL_SENSOR_NAME,
     CONF_COOLDOWN_PERIOD,
+    CONF_PRESERVE_VIRTUAL_TARGET,
 )
 
 
@@ -69,6 +70,7 @@ async def test_user_flow_success(hass: HomeAssistant) -> None:
         {
             "cooldown_period": 1800,
             "physical_sensor_name": "Physical",
+            "preserve_virtual_target": True,
         },
     )
 
@@ -78,6 +80,7 @@ async def test_user_flow_success(hass: HomeAssistant) -> None:
     assert result["data"][CONF_SENSORS][0]["name"] == "Remote"
     assert result["data"][CONF_COOLDOWN_PERIOD] == 1800
     assert result["data"][CONF_PHYSICAL_SENSOR_NAME] == "Physical"
+    assert result["data"][CONF_PRESERVE_VIRTUAL_TARGET] is True
 
 
 @pytest.mark.asyncio
@@ -108,12 +111,14 @@ async def test_options_flow(hass: HomeAssistant) -> None:
         user_input={
             "cooldown_period": 1800,
             "default_sensor": "Remote",
+            "preserve_virtual_target": True,
         },
     )
 
     assert result["type"] == FlowResultType.CREATE_ENTRY
     assert result["data"]["cooldown_period"] == 1800
     assert result["data"]["default_sensor"] == "Remote"
+    assert result["data"][CONF_PRESERVE_VIRTUAL_TARGET] is True
 
 
 @pytest.mark.asyncio

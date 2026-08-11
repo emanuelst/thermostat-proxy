@@ -9,18 +9,7 @@ from homeassistant.components.climate import HVACMode, ClimateEntityFeature, HVA
 from custom_components.thermostat_proxy.climate import CustomThermostatEntity
 
 
-@pytest.fixture
-def mock_hass():
-    """Mock Home Assistant instance."""
-    hass = MagicMock(spec=HomeAssistant)
-    hass.state = CoreState.running
-    hass.data = {}
-    hass.states = MagicMock()
-    hass.config = MagicMock()
-    hass.config.units.temperature_unit = "°C"
-    hass.services = AsyncMock()
-    hass.async_create_task.side_effect = lambda coro: coro.close()
-    return hass
+
 
 
 def create_dual_proxy(hass, thermostat="climate.real", hvac_mode=HVACMode.HEAT_COOL):
@@ -38,7 +27,7 @@ def create_dual_proxy(hass, thermostat="climate.real", hvac_mode=HVACMode.HEAT_C
     proxy.entity_id = "climate.test_proxy"
     proxy.async_write_ha_state = MagicMock()
 
-    mock_real_state = State(
+    hass.states.async_set(
         thermostat,
         hvac_mode,
         {
@@ -52,10 +41,7 @@ def create_dual_proxy(hass, thermostat="climate.real", hvac_mode=HVACMode.HEAT_C
             ),
         },
     )
-    hass.states.get.side_effect = lambda entity_id: (
-        mock_real_state if entity_id == thermostat else None
-    )
-    proxy._real_state = mock_real_state
+    proxy._real_state = hass.states.get(thermostat)
     proxy._update_real_temperature_limits()
     proxy._temperature_unit = "°C"
     proxy._sensor_states["sensor.remote"] = State("sensor.remote", "18.0")
@@ -67,9 +53,9 @@ def create_dual_proxy(hass, thermostat="climate.real", hvac_mode=HVACMode.HEAT_C
 
 @pytest.mark.parametrize("hvac_mode", [HVACMode.HEAT_COOL, HVACMode.AUTO])
 @pytest.mark.asyncio
-async def test_dual_setpoint_preset_mode_switch(mock_hass, hvac_mode):
+async def test_dual_setpoint_preset_mode_switch(hass, hvac_mode):
     """Test switching preset mode in range modes (HEAT_COOL / AUTO)."""
-    proxy = create_dual_proxy(mock_hass, hvac_mode=hvac_mode)
+    proxy = create_dual_proxy(hass, hvac_mode=hvac_mode)
 
     # Preset should allow Remote sensor in range mode
     assert proxy.preset_mode == "Remote"
@@ -87,17 +73,17 @@ async def test_dual_setpoint_preset_mode_switch(mock_hass, hvac_mode):
 
 @pytest.mark.parametrize("hvac_mode", [HVACMode.HEAT_COOL, HVACMode.AUTO])
 @pytest.mark.asyncio
-async def test_dual_setpoint_set_temperature(mock_hass, hvac_mode):
+async def test_dual_setpoint_set_temperature(hass, hvac_mode):
     """Test set_temperature with low and high targets across range modes."""
-    proxy = create_dual_proxy(mock_hass, hvac_mode=hvac_mode)
+    proxy = create_dual_proxy(hass, hvac_mode=hvac_mode)
 
     # Physical current = 20.0, Remote sensor = 18.0 (diff = +2.0)
     # Requested remote range: low = 19.0, high = 25.0
     # Expected real target: low = 21.0, high = 27.0
     await proxy.async_set_temperature(target_temp_low=19.0, target_temp_high=25.0)
 
-    assert mock_hass.services.async_call.called
-    args, kwargs = mock_hass.services.async_call.call_args
+    assert hass.services.async_call.called
+    args, kwargs = hass.services.async_call.call_args
     assert args[0] == "climate"
     assert args[1] == "set_temperature"
     assert args[2]["target_temp_low"] == 21.0
@@ -107,9 +93,9 @@ async def test_dual_setpoint_set_temperature(mock_hass, hvac_mode):
 
 
 @pytest.mark.asyncio
-async def test_dual_setpoint_realignment(mock_hass):
+async def test_dual_setpoint_realignment(hass):
     """Test remote sensor realignment in dual setpoint mode."""
-    proxy = create_dual_proxy(mock_hass)
+    proxy = create_dual_proxy(hass)
 
     proxy._real_state = State(
         "climate.real",
@@ -132,8 +118,8 @@ async def test_dual_setpoint_realignment(mock_hass):
     # Calculated real high = 20.0 + (24.0 - 16.0) = 28.0
     await proxy._async_realign_real_target_from_sensor()
 
-    assert mock_hass.services.async_call.called
-    args, kwargs = mock_hass.services.async_call.call_args
+    assert hass.services.async_call.called
+    args, kwargs = hass.services.async_call.call_args
     assert args[0] == "climate"
     assert args[1] == "set_temperature"
     assert args[2]["target_temp_low"] == 22.0
@@ -141,9 +127,9 @@ async def test_dual_setpoint_realignment(mock_hass):
 
 
 @pytest.mark.asyncio
-async def test_dual_setpoint_overdrive_heat(mock_hass):
+async def test_dual_setpoint_overdrive_heat(hass):
     """Test heat overdrive in dual setpoint mode when remote is cold and system is idle."""
-    proxy = create_dual_proxy(mock_hass)
+    proxy = create_dual_proxy(hass)
 
     # Thermostat is idle, current = 20.0, low = 18.0, high = 24.0
     proxy._real_state = State(
@@ -166,17 +152,17 @@ async def test_dual_setpoint_overdrive_heat(mock_hass):
 
     await proxy._async_realign_real_target_from_sensor()
 
-    assert mock_hass.services.async_call.called
-    args, kwargs = mock_hass.services.async_call.call_args
+    assert hass.services.async_call.called
+    args, kwargs = hass.services.async_call.call_args
     assert args[0] == "climate"
     assert args[1] == "set_temperature"
     assert args[2]["target_temp_low"] == 23.0
 
 
 @pytest.mark.asyncio
-async def test_dual_setpoint_overdrive_cool(mock_hass):
+async def test_dual_setpoint_overdrive_cool(hass):
     """Test cool overdrive in dual setpoint mode when remote is hot and system is idle."""
-    proxy = create_dual_proxy(mock_hass)
+    proxy = create_dual_proxy(hass)
 
     proxy._real_state = State(
         "climate.real",
@@ -198,23 +184,23 @@ async def test_dual_setpoint_overdrive_cool(mock_hass):
 
     await proxy._async_realign_real_target_from_sensor()
 
-    assert mock_hass.services.async_call.called
-    args, kwargs = mock_hass.services.async_call.call_args
+    assert hass.services.async_call.called
+    args, kwargs = hass.services.async_call.call_args
     assert args[0] == "climate"
     assert args[1] == "set_temperature"
     assert args[2]["target_temp_high"] == 17.0
 
 
 @pytest.mark.asyncio
-async def test_dual_setpoint_partial_set_temperature(mock_hass):
+async def test_dual_setpoint_partial_set_temperature(hass):
     """Test setting only low or high temperature in dual setpoint mode."""
-    proxy = create_dual_proxy(mock_hass)
+    proxy = create_dual_proxy(hass)
 
     # Only setting low
     await proxy.async_set_temperature(target_temp_low=19.0)
 
-    assert mock_hass.services.async_call.called
-    args, kwargs = mock_hass.services.async_call.call_args
+    assert hass.services.async_call.called
+    args, kwargs = hass.services.async_call.call_args
     assert args[0] == "climate"
     assert args[1] == "set_temperature"
     assert args[2]["target_temp_low"] == 21.0
@@ -223,9 +209,9 @@ async def test_dual_setpoint_partial_set_temperature(mock_hass):
 
 
 @pytest.mark.asyncio
-async def test_dual_setpoint_service_error_handling(mock_hass):
+async def test_dual_setpoint_service_error_handling(hass):
     """Test error handling during dual setpoint realignment."""
-    proxy = create_dual_proxy(mock_hass)
+    proxy = create_dual_proxy(hass)
 
     proxy._sensor_states["sensor.remote"] = State("sensor.remote", "16.0")
 
@@ -233,7 +219,7 @@ async def test_dual_setpoint_service_error_handling(mock_hass):
         if domain == "climate":
             raise Exception("502 Bad Gateway")
 
-    mock_hass.services.async_call.side_effect = side_effect
+    hass.services.async_call.side_effect = side_effect
 
     # Should handle error gracefully without raising
     await proxy._async_realign_real_target_from_sensor()

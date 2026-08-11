@@ -9,18 +9,7 @@ from homeassistant.components.climate import HVACMode, ClimateEntityFeature
 from custom_components.thermostat_proxy.climate import CustomThermostatEntity
 
 
-@pytest.fixture
-def mock_hass():
-    """Mock Home Assistant instance."""
-    hass = MagicMock(spec=HomeAssistant)
-    hass.state = CoreState.running
-    hass.data = {}
-    hass.states = MagicMock()
-    hass.config = MagicMock()
-    hass.config.units.temperature_unit = "°C"
-    hass.services = AsyncMock()
-    hass.async_create_task.side_effect = lambda coro: coro.close()
-    return hass
+
 
 
 def create_proxy(hass, thermostat="climate.real"):
@@ -36,7 +25,7 @@ def create_proxy(hass, thermostat="climate.real"):
         use_last_active_sensor=False,
     )
 
-    mock_real_state = State(
+    hass.states.async_set(
         thermostat,
         HVACMode.HEAT,
         {
@@ -46,10 +35,7 @@ def create_proxy(hass, thermostat="climate.real"):
             "supported_features": ClimateEntityFeature.TARGET_TEMPERATURE,
         },
     )
-    hass.states.get.side_effect = lambda entity_id: (
-        mock_real_state if entity_id == thermostat else None
-    )
-    proxy._real_state = mock_real_state
+    proxy._real_state = hass.states.get(thermostat)
     proxy._update_real_temperature_limits()
     proxy._temperature_unit = "°C"
     proxy._sensor_states["sensor.remote"] = State("sensor.remote", "20.0")
@@ -60,9 +46,9 @@ def create_proxy(hass, thermostat="climate.real"):
 
 
 @pytest.mark.asyncio
-async def test_overdrive_heat(mock_hass):
+async def test_overdrive_heat(hass):
     """Test that heat overdrive is applied when physical thermostat is satisfied but remote is cold."""
-    proxy = create_proxy(mock_hass)
+    proxy = create_proxy(hass)
 
     proxy._real_state = State(
         "climate.real",
@@ -83,17 +69,17 @@ async def test_overdrive_heat(mock_hass):
     await proxy._async_realign_real_target_from_sensor()
 
     # Verify service call
-    assert mock_hass.services.async_call.called
-    args, kwargs = mock_hass.services.async_call.call_args
+    assert hass.services.async_call.called
+    args, kwargs = hass.services.async_call.call_args
     assert args[0] == "climate"
     assert args[1] == "set_temperature"
     assert args[2]["temperature"] == 27.0
 
 
 @pytest.mark.asyncio
-async def test_overdrive_cool(mock_hass):
+async def test_overdrive_cool(hass):
     """Test that cool overdrive is applied when physical thermostat is satisfied but remote is hot."""
-    proxy = create_proxy(mock_hass)
+    proxy = create_proxy(hass)
     proxy._real_state = State(
         "climate.real",
         HVACMode.COOL,
@@ -114,17 +100,17 @@ async def test_overdrive_cool(mock_hass):
 
     await proxy._async_realign_real_target_from_sensor()
 
-    assert mock_hass.services.async_call.called
-    args, kwargs = mock_hass.services.async_call.call_args
+    assert hass.services.async_call.called
+    args, kwargs = hass.services.async_call.call_args
     assert args[0] == "climate"
     assert args[1] == "set_temperature"
     assert args[2]["temperature"] == 17.0
 
 
 @pytest.mark.asyncio
-async def test_cool_mode_target_temperature_on_range_capable_thermostat(mock_hass):
+async def test_cool_mode_target_temperature_on_range_capable_thermostat(hass):
     """Test that COOL mode presents single target_temperature on a dual-setpoint capable thermostat."""
-    proxy = create_proxy(mock_hass)
+    proxy = create_proxy(hass)
 
     # Real thermostat supports dual setpoints but is currently in COOL mode
     proxy._real_state = State(
@@ -157,8 +143,8 @@ async def test_cool_mode_target_temperature_on_range_capable_thermostat(mock_has
     # Setting target in COOL mode
     await proxy.async_set_temperature(temperature=21.0)
 
-    assert mock_hass.services.async_call.called
-    args, kwargs = mock_hass.services.async_call.call_args
+    assert hass.services.async_call.called
+    args, kwargs = hass.services.async_call.call_args
     assert args[0] == "climate"
     assert args[1] == "set_temperature"
     assert args[2]["temperature"] == 25.0  # Real target = 24.0 + (21.0 - 20.0) = 25.0
@@ -166,9 +152,9 @@ async def test_cool_mode_target_temperature_on_range_capable_thermostat(mock_has
 
 
 @pytest.mark.asyncio
-async def test_heat_mode_target_temperature_on_range_capable_thermostat(mock_hass):
+async def test_heat_mode_target_temperature_on_range_capable_thermostat(hass):
     """Test that HEAT mode presents single target_temperature on a dual-setpoint capable thermostat."""
-    proxy = create_proxy(mock_hass)
+    proxy = create_proxy(hass)
 
     proxy._real_state = State(
         "climate.real",
@@ -197,9 +183,9 @@ async def test_heat_mode_target_temperature_on_range_capable_thermostat(mock_has
 
 
 @pytest.mark.asyncio
-async def test_heat_cool_mode_target_temperatures(mock_hass):
+async def test_heat_cool_mode_target_temperatures(hass):
     """Test that HEAT_COOL mode presents range targets and None for single target_temperature."""
-    proxy = create_proxy(mock_hass)
+    proxy = create_proxy(hass)
 
     proxy._real_state = State(
         "climate.real",
@@ -227,9 +213,9 @@ async def test_heat_cool_mode_target_temperatures(mock_hass):
 
 
 @pytest.mark.asyncio
-async def test_mode_transition_target_sync(mock_hass):
+async def test_mode_transition_target_sync(hass):
     """Test that switching from HEAT_COOL to COOL adopts high setpoint and from HEAT_COOL to HEAT adopts low setpoint."""
-    proxy = create_proxy(mock_hass)
+    proxy = create_proxy(hass)
 
     # Initial state: HEAT_COOL mode with low=18.0, high=24.0, stale virtual_target=15.0
     old_state = State("climate.real", HVACMode.HEAT_COOL, {"temperature": None})
@@ -248,9 +234,9 @@ async def test_mode_transition_target_sync(mock_hass):
 
 
 @pytest.mark.asyncio
-async def test_mode_change_suppresses_external_target_change(mock_hass):
+async def test_mode_change_suppresses_external_target_change(hass):
     """Test that a mode change on the physical thermostat does not trigger false external change detection."""
-    proxy = create_proxy(mock_hass)
+    proxy = create_proxy(hass)
 
     proxy._selected_sensor_name = "Remote"
     proxy._last_real_target_temp = 22.0  # target in HEAT mode

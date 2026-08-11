@@ -249,3 +249,59 @@ async def test_replace_sensor_keep_name(hass: HomeAssistant) -> None:
     assert result["type"] == FlowResultType.CREATE_ENTRY
     assert result["data"][CONF_SENSORS][0]["name"] == "Remote"
     assert result["data"][CONF_SENSORS][0]["entity_id"] == "sensor.kitchen"
+
+@pytest.mark.asyncio
+async def test_reconfigure_flow(hass: HomeAssistant) -> None:
+    """Test the reconfigure flow."""
+    # Create an existing entry
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            "name": "Proxy",
+            "thermostat": "climate.real",
+            "sensors": [{"name": "Remote", "entity_id": "sensor.remote"}],
+            "default_sensor": "Remote",
+        },
+        unique_id="123",
+    )
+    entry.add_to_hass(hass)
+
+    # Initialize the reconfigure flow
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN,
+        context={"source": config_entries.SOURCE_RECONFIGURE, "entry_id": entry.entry_id},
+    )
+
+    assert result["type"] == "form"
+    assert result["step_id"] == "reconfigure"
+
+    # Submit the first step
+    result2 = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {"name": "New Proxy", "thermostat": "climate.new_real"},
+    )
+
+    assert result2["type"] == "form"
+    assert result2["step_id"] == "manage_sensors"
+
+    # Submit manage sensors
+    result3 = await hass.config_entries.flow.async_configure(
+        result2["flow_id"],
+        {"action": "finish"},
+    )
+
+    assert result3["type"] == "form"
+    assert result3["step_id"] == "finalize"
+
+    # Submit finalize
+    result4 = await hass.config_entries.flow.async_configure(
+        result3["flow_id"],
+        {},
+    )
+
+    assert result4["type"] == "abort"
+    assert result4["reason"] == "reconfigure_successful"
+
+    # Check the updated entry
+    assert entry.data["name"] == "New Proxy"
+    assert entry.data["thermostat"] == "climate.new_real"

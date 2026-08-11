@@ -8,15 +8,7 @@ from homeassistant.components.climate import ClimateEntityFeature, HVACMode
 from custom_components.thermostat_proxy.climate import CustomThermostatEntity
 
 
-@pytest.fixture
-def mock_hass():
-    """Mock Home Assistant instance."""
-    hass = MagicMock(spec=HomeAssistant)
-    hass.states = MagicMock()
-    hass.config = MagicMock()
-    hass.config.units.temperature_unit = "°C"
-    hass.services = AsyncMock()
-    return hass
+
 
 
 def create_proxy(hass, thermostat="climate.real", sensors=None, target_temp_step=1.0):
@@ -36,7 +28,7 @@ def create_proxy(hass, thermostat="climate.real", sensors=None, target_temp_step
     )
 
     # Mock physical thermostat state
-    mock_real_state = State(
+    hass.states.async_set(
         thermostat,
         HVACMode.HEAT,
         {
@@ -46,19 +38,16 @@ def create_proxy(hass, thermostat="climate.real", sensors=None, target_temp_step
             "supported_features": ClimateEntityFeature.TARGET_TEMPERATURE,
         },
     )
-    hass.states.get.side_effect = lambda entity_id: (
-        mock_real_state if entity_id == thermostat else None
-    )
-    proxy._real_state = mock_real_state
+    proxy._real_state = hass.states.get(thermostat)
     proxy._update_real_temperature_limits()
 
     return proxy
 
 
 @pytest.mark.asyncio
-async def test_infer_sensor_precision(mock_hass):
+async def test_infer_sensor_precision(hass):
     """Test inference of sensor precision from state string."""
-    proxy = create_proxy(mock_hass)
+    proxy = create_proxy(hass)
 
     assert proxy._infer_sensor_precision(State("sensor.1", "22.8")) == 0.1
     assert proxy._infer_sensor_precision(State("sensor.1", "22.85")) == 0.01
@@ -70,14 +59,12 @@ async def test_infer_sensor_precision(mock_hass):
 
 
 @pytest.mark.asyncio
-async def test_precision_and_step_handling(mock_hass):
+async def test_precision_and_step_handling(hass):
     """Test that precision and target_temp_step handle coarse and fine sensors correctly."""
-    proxy = create_proxy(mock_hass, target_temp_step=0.5)
+    proxy = create_proxy(hass, target_temp_step=0.5)
 
     # Sensor 1 reports 1.0 precision (coarse)
-    mock_hass.states.get.side_effect = lambda entity_id: (
-        State(entity_id, "22") if entity_id == "sensor.1" else proxy._real_state
-    )
+    hass.states.async_set("sensor.1", "22")
 
     proxy._sensor_states["sensor.1"] = State("sensor.1", "22")
     proxy._sensor_precisions["sensor.1"] = proxy._infer_sensor_precision(
@@ -104,9 +91,9 @@ async def test_precision_and_step_handling(mock_hass):
 
 
 @pytest.mark.asyncio
-async def test_log_formatting_preserves_decimals(mock_hass):
+async def test_log_formatting_preserves_decimals(hass):
     """Test that math formatting methods preserve exactly one decimal place."""
-    proxy = create_proxy(mock_hass)
+    proxy = create_proxy(hass)
     proxy._precision_override = 0.5
 
     # Output should always have .1f
@@ -120,9 +107,9 @@ async def test_log_formatting_preserves_decimals(mock_hass):
 
 
 @pytest.mark.asyncio
-async def test_pending_request_tolerance_covers_step(mock_hass):
+async def test_pending_request_tolerance_covers_step(hass):
     """Test that _pending_request_tolerance does not incorrectly incorporate target_temp_step to avoid ignoring manual changes."""
-    proxy = create_proxy(mock_hass, target_temp_step=0.5)
+    proxy = create_proxy(hass, target_temp_step=0.5)
     proxy._sensor_precisions["sensor.1"] = 1.0
     # With coarse sensor (1.0), precision resolves to 0.5 (min of step and sensor).
     # precision / 2 is 0.25.
@@ -131,9 +118,9 @@ async def test_pending_request_tolerance_covers_step(mock_hass):
     assert tolerance == 0.25
 
 @pytest.mark.asyncio
-async def test_overdrive_short_cycling_and_threshold(mock_hass):
+async def test_overdrive_short_cycling_and_threshold(hass):
     """Test that overdrive respects the threshold as a deadband and remains sticky."""
-    proxy = create_proxy(mock_hass, target_temp_step=0.1)
+    proxy = create_proxy(hass, target_temp_step=0.1)
     proxy._sensor_change_threshold = 0.5
     proxy._virtual_target_temperature = 72.6
     proxy._last_real_target_temp = 72.6
@@ -152,12 +139,7 @@ async def test_overdrive_short_cycling_and_threshold(mock_hass):
     
     mock_sensor_state = State("sensor.1", "72.6")
     
-    def mock_get(entity_id):
-        if entity_id == "climate.real": return mock_real_state
-        if entity_id == "sensor.1": return mock_sensor_state
-        return None
-        
-    mock_hass.states.get.side_effect = mock_get
+    hass.states.async_set("sensor.1", "72.6")
     proxy._real_state = mock_real_state
     proxy._sensor_states["sensor.1"] = mock_sensor_state
     

@@ -14,7 +14,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Prepare release folder
         run: |
@@ -27,6 +27,6 @@ jobs:
         run: bash -c "shopt -s dotglob && zip -r ../thermostat_proxy.zip *"
 
       - name: Upload artifact to release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: thermostat_proxy.zip

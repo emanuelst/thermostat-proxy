@@ -122,12 +122,7 @@ async def test_external_change_real_flow(hass: HomeAssistant, mode: str) -> None
     await hass.async_block_till_done()
 
     # Set virtual target temperature
-    await hass.services.async_call(
-        "climate",
-        "set_temperature",
-        {"entity_id": "climate.thermostat_proxy", "temperature": 26.0},
-        blocking=True,
-    )
+    await entity.async_set_temperature(temperature=26.0)
     # The real thermostat target should be adjusted to 20.0 + (26.0 - 24.0) = 22.0
     real_state = hass.states.get("climate.real")
     assert real_state.attributes["temperature"] == 22.0
@@ -151,3 +146,24 @@ async def test_external_change_real_flow(hass: HomeAssistant, mode: str) -> None
     # The virtual target should also decrease by 1 degree: 26.0 -> 25.0
     proxy_state = hass.states.get("climate.thermostat_proxy")
     assert proxy_state.attributes["temperature"] == 25.0
+
+@pytest.mark.asyncio
+async def test_setup_platform(hass: HomeAssistant) -> None:
+    """Test legacy YAML setup."""
+    from custom_components.thermostat_proxy.climate import async_setup_platform
+
+    config = {
+        "name": "YAML Proxy",
+        "thermostat": "climate.real",
+        "sensors": [{"name": "Remote", "entity_id": "sensor.remote"}],
+        "default_sensor": "Remote",
+    }
+
+    entities = []
+    def add_entities(new_entities):
+        entities.extend(new_entities)
+
+    await async_setup_platform(hass, config, add_entities, None)
+
+    assert len(entities) == 1
+    assert entities[0].name == "YAML Proxy"

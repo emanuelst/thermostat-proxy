@@ -310,6 +310,7 @@ class CustomThermostatEntity(RestoreEntity, ClimateEntity):
     """Thermostat proxy that can borrow any temperature sensor."""
 
     _attr_should_poll = False
+    _attr_translation_key = "thermostat_proxy"
 
     def __init__(
         self,

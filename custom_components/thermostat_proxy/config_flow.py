@@ -190,11 +190,15 @@ class CustomThermostatConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self._min_temp = entry.data.get(CONF_MIN_TEMP)
         self._max_temp = entry.data.get(CONF_MAX_TEMP)
         self._max_sync_offset = entry.data.get(CONF_MAX_SYNC_OFFSET)
-        self._disable_auto_switch = entry.data.get(
-            CONF_DISABLE_AUTO_SWITCH, DEFAULT_DISABLE_AUTO_SWITCH
+        self._disable_auto_switch = entry.options.get(
+            CONF_DISABLE_AUTO_SWITCH,
+            entry.data.get(CONF_DISABLE_AUTO_SWITCH, DEFAULT_DISABLE_AUTO_SWITCH),
         )
-        self._preserve_virtual_target = entry.data.get(
-            CONF_PRESERVE_VIRTUAL_TARGET, DEFAULT_PRESERVE_VIRTUAL_TARGET
+        self._preserve_virtual_target = entry.options.get(
+            CONF_PRESERVE_VIRTUAL_TARGET,
+            entry.data.get(
+                CONF_PRESERVE_VIRTUAL_TARGET, DEFAULT_PRESERVE_VIRTUAL_TARGET
+            ),
         )
         self._sensor_change_threshold = entry.data.get(
             CONF_SENSOR_CHANGE_THRESHOLD, DEFAULT_SENSOR_CHANGE_THRESHOLD

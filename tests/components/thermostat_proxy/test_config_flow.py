@@ -14,6 +14,8 @@ from custom_components.thermostat_proxy.const import (
     CONF_SENSORS,
     CONF_PHYSICAL_SENSOR_NAME,
     CONF_COOLDOWN_PERIOD,
+    CONF_DISABLE_AUTO_SWITCH,
+    CONF_PRESERVE_VIRTUAL_TARGET,
     CONF_PHYSICAL_TARGET_CHANGE_BEHAVIOR,
     TARGET_CHANGE_BEHAVIOR_PRESERVE_VIRTUAL_TARGET,
     TARGET_CHANGE_BEHAVIOR_AUTO_SWITCH,
@@ -304,6 +306,12 @@ async def test_reconfigure_flow(hass: HomeAssistant) -> None:
             "thermostat": "climate.real",
             "sensors": [{"name": "Remote", "entity_id": "sensor.remote"}],
             "default_sensor": "Remote",
+            CONF_DISABLE_AUTO_SWITCH: False,
+            CONF_PRESERVE_VIRTUAL_TARGET: False,
+        },
+        options={
+            CONF_DISABLE_AUTO_SWITCH: True,
+            CONF_PRESERVE_VIRTUAL_TARGET: True,
         },
         unique_id="123",
     )
@@ -348,3 +356,7 @@ async def test_reconfigure_flow(hass: HomeAssistant) -> None:
     # Check the updated entry
     assert entry.data["name"] == "New Proxy"
     assert entry.data["thermostat"] == "climate.new_real"
+    assert entry.data[CONF_DISABLE_AUTO_SWITCH] is True
+    assert entry.data[CONF_PRESERVE_VIRTUAL_TARGET] is True
+    assert entry.options[CONF_DISABLE_AUTO_SWITCH] is True
+    assert entry.options[CONF_PRESERVE_VIRTUAL_TARGET] is True

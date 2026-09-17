@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
+import contextlib
 from dataclasses import dataclass
 import datetime
 import logging
@@ -54,8 +55,11 @@ from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
 
 from .const import (
+    ATTR_ACTIVE_HUMIDITY_SENSOR,
+    ATTR_ACTIVE_HUMIDITY_SENSOR_ENTITY_ID,
     ATTR_ACTIVE_SENSOR,
     ATTR_ACTIVE_SENSOR_ENTITY_ID,
+    ATTR_HUMIDITY_OVERDRIVE_ACTIVE,
     ATTR_REAL_CURRENT_HUMIDITY,
     ATTR_REAL_CURRENT_TEMPERATURE,
     ATTR_REAL_TARGET_TEMPERATURE,
@@ -63,13 +67,16 @@ from .const import (
     ATTR_UNAVAILABLE_ENTITIES,
     CONF_COOLDOWN_PERIOD,
     CONF_DEFAULT_SENSOR,
+    CONF_DEFAULT_TARGET_HUMIDITY,
     CONF_DISABLE_AUTO_SWITCH,
+    CONF_MAX_HUMIDITY_OVERCOOL,
     CONF_MAX_SYNC_OFFSET,
     CONF_MAX_TEMP,
     CONF_MIN_TEMP,
     CONF_PHYSICAL_SENSOR_NAME,
     CONF_SENSOR_CHANGE_THRESHOLD,
     CONF_SENSOR_ENTITY_ID,
+    CONF_SENSOR_HUMIDITY_ENTITY_ID,
     CONF_SENSOR_NAME,
     CONF_SENSORS,
     CONF_THERMOSTAT,
@@ -77,17 +84,26 @@ from .const import (
     CONF_USE_LAST_ACTIVE_SENSOR,
     DEFAULT_COOLDOWN_PERIOD,
     DEFAULT_DISABLE_AUTO_SWITCH,
+    DEFAULT_HUMIDITY_DEADBAND,
+    DEFAULT_MAX_HUMIDITY_OVERCOOL,
     DEFAULT_MAX_SYNC_OFFSET,
     DEFAULT_NAME,
     DEFAULT_SENSOR_CHANGE_THRESHOLD,
     DEFAULT_SENSOR_LAST_ACTIVE,
+    DEFAULT_TARGET_HUMIDITY,
     OVERDRIVE_ADJUSTMENT_COOL,
     OVERDRIVE_ADJUSTMENT_HEAT,
     PHYSICAL_SENSOR_NAME,
     PHYSICAL_SENSOR_SENTINEL,
+    SYNC_LOG_SUPPRESSION_PADDING_SEC,
     UNINITIALIZED_TEMP_CELSIUS,
     UNINITIALIZED_TEMP_FAHRENHEIT,
 )
+
+ATTR_HUMIDITY = "humidity"
+ATTR_MIN_HUMIDITY = "min_humidity"
+ATTR_MAX_HUMIDITY = "max_humidity"
+SERVICE_SET_HUMIDITY = "set_humidity"
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -125,6 +141,9 @@ _RESERVED_REAL_ATTRIBUTES = {
     "target_temp_high",
     "target_temp_low",
     "current_humidity",
+    "humidity",
+    "min_humidity",
+    "max_humidity",
     "min_temp",
     "max_temp",
 }
@@ -136,6 +155,7 @@ SENSOR_SCHEMA = vol.Schema(
     {
         vol.Required(CONF_SENSOR_NAME): cv.string,
         vol.Required(CONF_SENSOR_ENTITY_ID): cv.entity_id,
+        vol.Optional(CONF_SENSOR_HUMIDITY_ENTITY_ID): vol.Any(cv.entity_id, None),
     }
 )
 
@@ -205,6 +225,12 @@ async def async_setup_platform(
                 sensor_change_threshold=config.get(
                     CONF_SENSOR_CHANGE_THRESHOLD, DEFAULT_SENSOR_CHANGE_THRESHOLD
                 ),
+                max_humidity_overcool=config.get(
+                    CONF_MAX_HUMIDITY_OVERCOOL, DEFAULT_MAX_HUMIDITY_OVERCOOL
+                ),
+                default_target_humidity=config.get(
+                    CONF_DEFAULT_TARGET_HUMIDITY, DEFAULT_TARGET_HUMIDITY
+                ),
             )
         ]
     )
@@ -262,6 +288,14 @@ async def async_setup_entry(
         CONF_SENSOR_CHANGE_THRESHOLD,
         data.get(CONF_SENSOR_CHANGE_THRESHOLD, DEFAULT_SENSOR_CHANGE_THRESHOLD),
     )
+    max_humidity_overcool = entry.options.get(
+        CONF_MAX_HUMIDITY_OVERCOOL,
+        data.get(CONF_MAX_HUMIDITY_OVERCOOL, DEFAULT_MAX_HUMIDITY_OVERCOOL),
+    )
+    default_target_humidity = entry.options.get(
+        CONF_DEFAULT_TARGET_HUMIDITY,
+        data.get(CONF_DEFAULT_TARGET_HUMIDITY, DEFAULT_TARGET_HUMIDITY),
+    )
 
     if raw_default_sensor == DEFAULT_SENSOR_LAST_ACTIVE:
         use_last_active_sensor = True
@@ -294,6 +328,8 @@ async def async_setup_entry(
                 max_sync_offset=max_sync_offset,
                 disable_auto_switch=disable_auto_switch,
                 sensor_change_threshold=sensor_change_threshold,
+                max_humidity_overcool=max_humidity_overcool,
+                default_target_humidity=default_target_humidity,
             )
         ]
     )
@@ -301,10 +337,11 @@ async def async_setup_entry(
 
 @dataclass
 class SensorConfig:
-    """Configuration for a temperature sensor."""
+    """Configuration for a temperature and optional humidity sensor."""
 
     name: str
     entity_id: str | None
+    humidity_entity_id: str | None = None
     is_physical: bool = False
 
 
@@ -330,6 +367,8 @@ class CustomThermostatEntity(RestoreEntity, ClimateEntity):
         max_sync_offset: float | None = None,
         disable_auto_switch: bool = False,
         sensor_change_threshold: float = DEFAULT_SENSOR_CHANGE_THRESHOLD,
+        max_humidity_overcool: float = DEFAULT_MAX_HUMIDITY_OVERCOOL,
+        default_target_humidity: int = DEFAULT_TARGET_HUMIDITY,
     ) -> None:
         self.hass = hass
         if isinstance(cooldown_period, (int, float)):
@@ -343,7 +382,9 @@ class CustomThermostatEntity(RestoreEntity, ClimateEntity):
         self._physical_sensor_name = physical_sensor_name or PHYSICAL_SENSOR_NAME
         base_sensors: list[SensorConfig] = [
             SensorConfig(
-                name=item[CONF_SENSOR_NAME], entity_id=item[CONF_SENSOR_ENTITY_ID]
+                name=item[CONF_SENSOR_NAME],
+                entity_id=item[CONF_SENSOR_ENTITY_ID],
+                humidity_entity_id=item.get(CONF_SENSOR_HUMIDITY_ENTITY_ID),
             )
             for item in sensors
         ]
@@ -361,7 +402,9 @@ class CustomThermostatEntity(RestoreEntity, ClimateEntity):
             self._selected_sensor_name = self._sensors[0].name
         self._sensor_states: dict[str, State | None] = {}
         self._attr_supported_features = (
-            ClimateEntityFeature.TARGET_TEMPERATURE | ClimateEntityFeature.PRESET_MODE
+            ClimateEntityFeature.TARGET_TEMPERATURE
+            | ClimateEntityFeature.PRESET_MODE
+            | ClimateEntityFeature.TARGET_HUMIDITY
         )
         self._virtual_target_temperature: float | None = None
         self._virtual_target_temperature_low: float | None = None
@@ -383,6 +426,11 @@ class CustomThermostatEntity(RestoreEntity, ClimateEntity):
         self._max_sync_offset: float | None = max_sync_offset
         self._disable_auto_switch: bool = disable_auto_switch
         self._sensor_change_threshold: float = float(sensor_change_threshold)
+        self._max_humidity_overcool: float = float(max_humidity_overcool)
+        self._default_target_humidity: int = int(default_target_humidity)
+        self._virtual_target_humidity: int = int(default_target_humidity)
+        self._active_overdrive_humidity: bool = False
+        self._sensor_humidity_states: dict[str, State | None] = {}
         self._last_acted_sensor_temp: float | None = None
         self._target_temp_step: float | None = None
         self._precision_override: float | None = None
@@ -390,7 +438,6 @@ class CustomThermostatEntity(RestoreEntity, ClimateEntity):
         self._command_lock = asyncio.Lock()
         self._sensor_realign_task: asyncio.Task | None = None
         self._suppress_sync_logs_until: float | None = None
-        self._realign_trigger_source: str | None = None
         self._realign_trigger_source: str | None = None
         self._cooldown_timer_unsub: Callable[[], None] | None = None
         self._sensor_precisions: dict[str, float] = {}
@@ -420,6 +467,10 @@ class CustomThermostatEntity(RestoreEntity, ClimateEntity):
             self._sensor_precisions[sensor.entity_id] = self._infer_sensor_precision(
                 self._sensor_states[sensor.entity_id]
             )
+            if sensor.humidity_entity_id:
+                self._sensor_humidity_states[sensor.humidity_entity_id] = (
+                    self.hass.states.get(sensor.humidity_entity_id)
+                )
         self._temperature_unit = self._discover_temperature_unit()
         if self._last_real_target_temp is None:
             self._last_real_target_temp = self._get_real_target_temperature()
@@ -434,6 +485,8 @@ class CustomThermostatEntity(RestoreEntity, ClimateEntity):
                 or self._get_active_sensor_temperature()
                 or self._get_real_current_temperature()
             )
+        if self._virtual_target_humidity is None:
+            self._virtual_target_humidity = self._default_target_humidity
         self._initialize_missing_virtual_range_targets()
         self._enforce_hvac_mode_restrictions()
         await self._async_subscribe_to_states()
@@ -476,6 +529,20 @@ class CustomThermostatEntity(RestoreEntity, ClimateEntity):
                 self._async_handle_sensor_state_event,
             )
         )
+
+        humidity_entity_ids = [
+            sensor.humidity_entity_id
+            for sensor in self._sensors
+            if not sensor.is_physical and sensor.humidity_entity_id
+        ]
+        if humidity_entity_ids:
+            self._unsub_listeners.append(
+                async_track_state_change_event(
+                    self.hass,
+                    humidity_entity_ids,
+                    self._async_handle_humidity_sensor_state_event,
+                )
+            )
 
     async def async_will_remove_from_hass(self) -> None:
         """Clean up listeners when entity is removed."""
@@ -715,6 +782,46 @@ class CustomThermostatEntity(RestoreEntity, ClimateEntity):
         if not sensor or sensor.is_physical:
             return False
         return sensor.entity_id == entity_id
+
+    @callback
+    def _async_handle_humidity_sensor_state_event(self, event) -> None:
+        """Handle updates to any configured humidity sensor."""
+        entity_id = event.data.get("entity_id")
+        new_state: State | None = event.data.get("new_state")
+
+        self._log_debug(
+            "Humidity sensor %s state event: new_state=%s",
+            entity_id,
+            new_state.state if new_state else None,
+        )
+
+        if entity_id:
+            self._sensor_humidity_states[entity_id] = new_state
+        if self._is_active_humidity_sensor_entity(entity_id):
+            self._schedule_target_realign(trigger_source="humidity")
+        self.async_write_ha_state()
+
+    def _is_active_humidity_sensor_entity(self, entity_id: str | None) -> bool:
+        if not entity_id:
+            return False
+        sensor = self._sensor_lookup.get(self._selected_sensor_name)
+        if not sensor or sensor.is_physical:
+            return False
+        return sensor.humidity_entity_id == entity_id
+
+    def _get_active_sensor_humidity(self) -> float | None:
+        sensor = self._sensor_lookup.get(self._selected_sensor_name)
+        if not sensor or sensor.is_physical or not sensor.humidity_entity_id:
+            return None
+        state = self._sensor_humidity_states.get(sensor.humidity_entity_id)
+        if state is None and self.hass is not None:
+            state = self.hass.states.get(sensor.humidity_entity_id)
+        if not state or state.state in (STATE_UNAVAILABLE, STATE_UNKNOWN):
+            return None
+        try:
+            return float(state.state)
+        except (ValueError, TypeError):
+            return None
 
     def _schedule_target_realign(
         self, retry: bool = False, trigger_source: str | None = None
@@ -1034,6 +1141,15 @@ class CustomThermostatEntity(RestoreEntity, ClimateEntity):
             return None
         return self._real_state.attributes.get(ATTR_CURRENT_HUMIDITY)
 
+    def _active_preset_has_humidity(self) -> bool:
+        """Return True if the active preset has a bound humidity source."""
+        active_sensor = self._sensor_lookup.get(self._selected_sensor_name)
+        if not active_sensor:
+            return False
+        if active_sensor.is_physical:
+            return self._get_real_current_humidity() is not None
+        return bool(active_sensor.humidity_entity_id)
+
     def _get_active_sensor_temperature(self) -> float | None:
         sensor = self._sensor_lookup.get(self._selected_sensor_name)
         if not sensor:
@@ -1166,6 +1282,32 @@ class CustomThermostatEntity(RestoreEntity, ClimateEntity):
         )
 
     @property
+    def current_humidity(self) -> float | None:
+        return self._get_active_sensor_humidity() or self._get_real_current_humidity()
+
+    @property
+    def target_humidity(self) -> int | None:
+        return self._virtual_target_humidity
+
+    @property
+    def min_humidity(self) -> int:
+        if self._real_state and ATTR_MIN_HUMIDITY in self._real_state.attributes:
+            try:
+                return int(self._real_state.attributes[ATTR_MIN_HUMIDITY])
+            except (ValueError, TypeError):
+                pass
+        return 30
+
+    @property
+    def max_humidity(self) -> int:
+        if self._real_state and ATTR_MAX_HUMIDITY in self._real_state.attributes:
+            try:
+                return int(self._real_state.attributes[ATTR_MAX_HUMIDITY])
+            except (ValueError, TypeError):
+                pass
+        return 99
+
+    @property
     def is_range_mode(self) -> bool:
         """Return True if active HVAC mode uses range (dual) setpoints."""
         if not (
@@ -1259,10 +1401,19 @@ class CustomThermostatEntity(RestoreEntity, ClimateEntity):
             }
             attrs.update(forwarded)
         sensor = self._sensor_lookup.get(self._selected_sensor_name)
+        if sensor and not sensor.is_physical and sensor.humidity_entity_id:
+            active_humidity_name = self._selected_sensor_name
+            active_humidity_entity_id = sensor.humidity_entity_id
+        else:
+            active_humidity_name = self._physical_sensor_name
+            active_humidity_entity_id = self._real_entity_id
         attrs.update(
             {
                 ATTR_ACTIVE_SENSOR: self._selected_sensor_name,
                 ATTR_ACTIVE_SENSOR_ENTITY_ID: sensor.entity_id if sensor else None,
+                ATTR_ACTIVE_HUMIDITY_SENSOR: active_humidity_name,
+                ATTR_ACTIVE_HUMIDITY_SENSOR_ENTITY_ID: active_humidity_entity_id,
+                ATTR_HUMIDITY_OVERDRIVE_ACTIVE: self._active_overdrive_humidity,
                 ATTR_REAL_CURRENT_TEMPERATURE: self._get_real_current_temperature(),
                 ATTR_REAL_TARGET_TEMPERATURE: self._last_real_target_temp
                 or self._get_real_target_temperature(),
@@ -1287,6 +1438,7 @@ class CustomThermostatEntity(RestoreEntity, ClimateEntity):
             # Reset overdrive state on manual temperature change
             self._active_overdrive_heat = False
             self._active_overdrive_cool = False
+            self._active_overdrive_humidity = False
 
             # Handle dual setpoints for range-based modes (Auto/Heat-Cool)
             high = kwargs.get(ATTR_TARGET_TEMP_HIGH)
@@ -1456,11 +1608,41 @@ class CustomThermostatEntity(RestoreEntity, ClimateEntity):
             self._virtual_target_temperature = constrained_target
             self.async_write_ha_state()
 
+    async def async_set_humidity(self, humidity: int) -> None:
+        """Set new target humidity."""
+        clamped = max(self.min_humidity, min(self.max_humidity, int(humidity)))
+        self._virtual_target_humidity = clamped
+
+        sensor = self._sensor_lookup.get(self._selected_sensor_name)
+        if (
+            sensor
+            and sensor.is_physical
+            and self._real_state
+            and (
+                self._real_state.attributes.get("supported_features", 0)
+                & ClimateEntityFeature.TARGET_HUMIDITY
+            )
+        ):
+            await self.hass.services.async_call(
+                CLIMATE_DOMAIN,
+                SERVICE_SET_HUMIDITY,
+                {
+                    ATTR_ENTITY_ID: self._real_entity_id,
+                    ATTR_HUMIDITY: clamped,
+                },
+                context=self._context,
+                blocking=True,
+            )
+
+        self._schedule_target_realign(trigger_source="humidity")
+        self.async_write_ha_state()
+
     async def async_set_hvac_mode(self, hvac_mode: HVACMode) -> None:
         self._log_debug("async_set_hvac_mode called with mode: %s", hvac_mode)
         # Reset overdrive state on mode change
         self._active_overdrive_heat = False
         self._active_overdrive_cool = False
+        self._active_overdrive_humidity = False
 
         await self.hass.services.async_call(
             CLIMATE_DOMAIN,
@@ -1563,6 +1745,9 @@ class CustomThermostatEntity(RestoreEntity, ClimateEntity):
         segments.append(f"sensor_entity={sensor_entity or 'unknown'}")
         if sensor_display is not None:
             segments.append(f"sensor_temperature={sensor_display}{unit}")
+        sensor_hum = self.current_humidity
+        if sensor_hum is not None:
+            segments.append(f"sensor_humidity={sensor_hum:.0f}%")
 
         actor_name = await self._get_actor_name()
         suffix = f" (by {actor_name})" if actor_name else ""
@@ -1709,7 +1894,7 @@ class CustomThermostatEntity(RestoreEntity, ClimateEntity):
     def _start_auto_sync_log_suppression(self) -> None:
         """Temporarily silence auto-sync logs after commands we initiate."""
 
-        self._suppress_sync_logs_until = time.monotonic() + 5
+        self._suppress_sync_logs_until = time.monotonic() + SYNC_LOG_SUPPRESSION_PADDING_SEC
 
     def _should_log_auto_sync(self) -> bool:
         """Return True if we're outside the suppression window."""
@@ -1932,6 +2117,56 @@ class CustomThermostatEntity(RestoreEntity, ClimateEntity):
                     else:
                         self._active_overdrive_cool = False
 
+                    # Humidity Overdrive: if temperature setpoint is satisfied, but humidity is still high
+                    if not want_cool and self._max_humidity_overcool > 0:
+                        has_local_humidity = self._active_preset_has_humidity()
+                        curr_humidity = self.current_humidity
+                        if (
+                            has_local_humidity
+                            and self._virtual_target_humidity is not None
+                            and curr_humidity is not None
+                        ):
+                            if not self._active_overdrive_humidity:
+                                want_dehum = curr_humidity > (
+                                    self._virtual_target_humidity
+                                    + DEFAULT_HUMIDITY_DEADBAND
+                                )
+                            else:
+                                want_dehum = (
+                                    curr_humidity > self._virtual_target_humidity
+                                )
+
+                            min_overcool_target = (
+                                self._virtual_target_temperature
+                                - self._max_humidity_overcool
+                            )
+                            can_overcool = (
+                                sensor_temp > min_overcool_target
+                                if sensor_temp is not None
+                                else False
+                            )
+
+                            if (
+                                want_dehum
+                                and can_overcool
+                                and (not_cooling or self._active_overdrive_humidity)
+                            ):
+                                self._active_overdrive_humidity = True
+                                overdrive_active = True
+                                overdrive_adjust = OVERDRIVE_ADJUSTMENT_COOL
+                                _LOGGER.info(
+                                    "Humidity Overdrive active: Dehumidification required (current: %s%%, target: %s%%) but thermostat idle. Applying %s offset.",
+                                    curr_humidity,
+                                    self._virtual_target_humidity,
+                                    overdrive_adjust,
+                                )
+                            else:
+                                self._active_overdrive_humidity = False
+                        else:
+                            self._active_overdrive_humidity = False
+                    else:
+                        self._active_overdrive_humidity = False
+
             if overdrive_active:
                 calculated_real_target = calculated_real_target + overdrive_adjust
 
@@ -1962,7 +2197,13 @@ class CustomThermostatEntity(RestoreEntity, ClimateEntity):
             ):
                 return
 
-            reason = "sensor realignment" + (" (overdrive)" if overdrive_active else "")
+            reason_overdrive = ""
+            if overdrive_active:
+                if self._active_overdrive_humidity:
+                    reason_overdrive = " (humidity overdrive)"
+                else:
+                    reason_overdrive = " (overdrive)"
+            reason = f"sensor realignment{reason_overdrive}"
             if retry:
                 reason += " (cooldown expired)"
 
@@ -2112,6 +2353,57 @@ class CustomThermostatEntity(RestoreEntity, ClimateEntity):
                     )
                 else:
                     self._active_overdrive_cool = False
+
+                if (
+                    not want_cool
+                    and self._max_humidity_overcool > 0
+                    and self._virtual_target_temperature_high is not None
+                    and calculated_real_high is not None
+                ):
+                    has_local_humidity = self._active_preset_has_humidity()
+                    curr_humidity = self.current_humidity
+                    if (
+                        has_local_humidity
+                        and self._virtual_target_humidity is not None
+                        and curr_humidity is not None
+                    ):
+                        if not self._active_overdrive_humidity:
+                            want_dehum = curr_humidity > (
+                                self._virtual_target_humidity
+                                + DEFAULT_HUMIDITY_DEADBAND
+                            )
+                        else:
+                            want_dehum = curr_humidity > self._virtual_target_humidity
+
+                        min_overcool_target = (
+                            self._virtual_target_temperature_high
+                            - self._max_humidity_overcool
+                        )
+                        can_overcool = (
+                            sensor_temp > min_overcool_target
+                            if sensor_temp is not None
+                            else False
+                        )
+
+                        if (
+                            want_dehum
+                            and can_overcool
+                            and (not_cooling or self._active_overdrive_humidity)
+                        ):
+                            self._active_overdrive_humidity = True
+                            overdrive_adjust_high = OVERDRIVE_ADJUSTMENT_COOL
+                            _LOGGER.info(
+                                "Humidity Overdrive active (dual high): Dehumidification required (current: %s%%, target: %s%%) but thermostat idle. Applying %s offset.",
+                                curr_humidity,
+                                self._virtual_target_humidity,
+                                overdrive_adjust_high,
+                            )
+                        else:
+                            self._active_overdrive_humidity = False
+                    else:
+                        self._active_overdrive_humidity = False
+                else:
+                    self._active_overdrive_humidity = False
 
         if calculated_real_low is not None and overdrive_adjust_low != 0.0:
             calculated_real_low += overdrive_adjust_low
@@ -2302,6 +2594,13 @@ class CustomThermostatEntity(RestoreEntity, ClimateEntity):
         if restored_real is not None:
             self._last_real_target_temp = restored_real
 
+        restored_humidity = last_state.attributes.get(ATTR_HUMIDITY)
+        if restored_humidity is not None:
+            with contextlib.suppress(ValueError, TypeError):
+                self._virtual_target_humidity = int(restored_humidity)
+        if self._virtual_target_humidity is None:
+            self._virtual_target_humidity = self._default_target_humidity
+
     def _update_real_temperature_limits(self) -> None:
         if not self._real_state:
             self._min_temp = None
@@ -2338,7 +2637,9 @@ class CustomThermostatEntity(RestoreEntity, ClimateEntity):
         # Combine base features with dynamically detected fan support
 
         base_features = (
-            ClimateEntityFeature.TARGET_TEMPERATURE | ClimateEntityFeature.PRESET_MODE
+            ClimateEntityFeature.TARGET_TEMPERATURE
+            | ClimateEntityFeature.PRESET_MODE
+            | ClimateEntityFeature.TARGET_HUMIDITY
         )
 
         if supported & ClimateEntityFeature.TARGET_TEMPERATURE_RANGE:

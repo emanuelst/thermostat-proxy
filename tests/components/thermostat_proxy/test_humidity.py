@@ -398,10 +398,10 @@ async def test_humidity_sensor_state_change_listener(hass: HomeAssistant):
         "new_state": State("sensor.remote_humidity", "60"),
     }
 
-    with patch.object(proxy, "_async_realign_real_target_from_sensor") as mock_realign:
+    with patch.object(proxy, "_schedule_target_realign") as mock_schedule:
         proxy._async_handle_humidity_sensor_state_event(event)
         assert proxy._sensor_humidity_states["sensor.remote_humidity"].state == "60"
-        assert mock_realign.called
+        mock_schedule.assert_called_once_with(trigger_source="humidity")
         assert proxy.async_write_ha_state.called
 
 

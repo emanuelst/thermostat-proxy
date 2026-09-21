@@ -100,6 +100,8 @@ from .const import (
     UNINITIALIZED_TEMP_FAHRENHEIT,
 )
 
+# Defined locally because homeassistant.components.climate.const does not
+# export these constants in all supported HA versions.
 ATTR_HUMIDITY = "humidity"
 ATTR_MIN_HUMIDITY = "min_humidity"
 ATTR_MAX_HUMIDITY = "max_humidity"
@@ -401,6 +403,10 @@ class CustomThermostatEntity(RestoreEntity, ClimateEntity):
         else:
             self._selected_sensor_name = self._sensors[0].name
         self._sensor_states: dict[str, State | None] = {}
+        # TARGET_HUMIDITY is always advertised so the UI exposes the
+        # humidity slider even before a remote humidity sensor is paired.
+        # The overdrive logic itself guards against activating without a
+        # valid humidity source via _active_preset_has_humidity().
         self._attr_supported_features = (
             ClimateEntityFeature.TARGET_TEMPERATURE
             | ClimateEntityFeature.PRESET_MODE
@@ -1142,13 +1148,78 @@ class CustomThermostatEntity(RestoreEntity, ClimateEntity):
         return self._real_state.attributes.get(ATTR_CURRENT_HUMIDITY)
 
     def _active_preset_has_humidity(self) -> bool:
-        """Return True if the active preset has a bound humidity source."""
+        """Return True if the active preset has a paired remote humidity sensor.
+
+        The physical preset always returns False so that humidity overdrive
+        never engages using only the real thermostat's built-in reading.
+        """
         active_sensor = self._sensor_lookup.get(self._selected_sensor_name)
         if not active_sensor:
             return False
         if active_sensor.is_physical:
-            return self._get_real_current_humidity() is not None
+            return False
         return bool(active_sensor.humidity_entity_id)
+
+    def _evaluate_humidity_overdrive(
+        self,
+        reference_temp: float | None,
+        sensor_temp: float | None,
+        not_cooling: bool,
+        label: str = "",
+    ) -> float:
+        """Evaluate humidity overdrive and return the cooling offset to apply.
+
+        Returns OVERDRIVE_ADJUSTMENT_COOL when humidity overdrive should be
+        active, 0.0 otherwise.  Sets ``_active_overdrive_humidity`` as a
+        side-effect.
+        """
+        if self._max_humidity_overcool <= 0 or reference_temp is None:
+            self._active_overdrive_humidity = False
+            return 0.0
+
+        has_local_humidity = self._active_preset_has_humidity()
+        curr_humidity = self.current_humidity
+        if not (
+            has_local_humidity
+            and self._virtual_target_humidity is not None
+            and curr_humidity is not None
+        ):
+            self._active_overdrive_humidity = False
+            return 0.0
+
+        if not self._active_overdrive_humidity:
+            want_dehum = curr_humidity > (
+                self._virtual_target_humidity + DEFAULT_HUMIDITY_DEADBAND
+            )
+        else:
+            want_dehum = curr_humidity > self._virtual_target_humidity
+
+        min_overcool_target = reference_temp - self._max_humidity_overcool
+        can_overcool = (
+            sensor_temp > min_overcool_target if sensor_temp is not None else False
+        )
+
+        if (
+            want_dehum
+            and can_overcool
+            and (not_cooling or self._active_overdrive_humidity)
+        ):
+            was_active = self._active_overdrive_humidity
+            self._active_overdrive_humidity = True
+            if not was_active:
+                _LOGGER.info(
+                    "Humidity Overdrive active%s: Dehumidification required "
+                    "(current: %s%%, target: %s%%) but thermostat idle. "
+                    "Applying %s offset.",
+                    label,
+                    curr_humidity,
+                    self._virtual_target_humidity,
+                    OVERDRIVE_ADJUSTMENT_COOL,
+                )
+            return OVERDRIVE_ADJUSTMENT_COOL
+
+        self._active_overdrive_humidity = False
+        return 0.0
 
     def _get_active_sensor_temperature(self) -> float | None:
         sensor = self._sensor_lookup.get(self._selected_sensor_name)
@@ -1697,6 +1768,7 @@ class CustomThermostatEntity(RestoreEntity, ClimateEntity):
 
     async def async_set_preset_mode(self, preset_mode: str) -> None:
         self._log_debug("async_set_preset_mode called with preset: %s", preset_mode)
+        self._active_overdrive_humidity = False
         if preset_mode not in self._sensor_lookup:
             raise ValueError(f"Unknown preset '{preset_mode}'")
 
@@ -1894,7 +1966,9 @@ class CustomThermostatEntity(RestoreEntity, ClimateEntity):
     def _start_auto_sync_log_suppression(self) -> None:
         """Temporarily silence auto-sync logs after commands we initiate."""
 
-        self._suppress_sync_logs_until = time.monotonic() + SYNC_LOG_SUPPRESSION_PADDING_SEC
+        self._suppress_sync_logs_until = (
+            time.monotonic() + SYNC_LOG_SUPPRESSION_PADDING_SEC
+        )
 
     def _should_log_auto_sync(self) -> bool:
         """Return True if we're outside the suppression window."""
@@ -2118,52 +2192,15 @@ class CustomThermostatEntity(RestoreEntity, ClimateEntity):
                         self._active_overdrive_cool = False
 
                     # Humidity Overdrive: if temperature setpoint is satisfied, but humidity is still high
-                    if not want_cool and self._max_humidity_overcool > 0:
-                        has_local_humidity = self._active_preset_has_humidity()
-                        curr_humidity = self.current_humidity
-                        if (
-                            has_local_humidity
-                            and self._virtual_target_humidity is not None
-                            and curr_humidity is not None
-                        ):
-                            if not self._active_overdrive_humidity:
-                                want_dehum = curr_humidity > (
-                                    self._virtual_target_humidity
-                                    + DEFAULT_HUMIDITY_DEADBAND
-                                )
-                            else:
-                                want_dehum = (
-                                    curr_humidity > self._virtual_target_humidity
-                                )
-
-                            min_overcool_target = (
-                                self._virtual_target_temperature
-                                - self._max_humidity_overcool
-                            )
-                            can_overcool = (
-                                sensor_temp > min_overcool_target
-                                if sensor_temp is not None
-                                else False
-                            )
-
-                            if (
-                                want_dehum
-                                and can_overcool
-                                and (not_cooling or self._active_overdrive_humidity)
-                            ):
-                                self._active_overdrive_humidity = True
-                                overdrive_active = True
-                                overdrive_adjust = OVERDRIVE_ADJUSTMENT_COOL
-                                _LOGGER.info(
-                                    "Humidity Overdrive active: Dehumidification required (current: %s%%, target: %s%%) but thermostat idle. Applying %s offset.",
-                                    curr_humidity,
-                                    self._virtual_target_humidity,
-                                    overdrive_adjust,
-                                )
-                            else:
-                                self._active_overdrive_humidity = False
-                        else:
-                            self._active_overdrive_humidity = False
+                    if not want_cool:
+                        humidity_adjust = self._evaluate_humidity_overdrive(
+                            self._virtual_target_temperature,
+                            sensor_temp,
+                            not_cooling,
+                        )
+                        if humidity_adjust != 0.0:
+                            overdrive_active = True
+                            overdrive_adjust = humidity_adjust
                     else:
                         self._active_overdrive_humidity = False
 
@@ -2354,54 +2391,15 @@ class CustomThermostatEntity(RestoreEntity, ClimateEntity):
                 else:
                     self._active_overdrive_cool = False
 
-                if (
-                    not want_cool
-                    and self._max_humidity_overcool > 0
-                    and self._virtual_target_temperature_high is not None
-                    and calculated_real_high is not None
-                ):
-                    has_local_humidity = self._active_preset_has_humidity()
-                    curr_humidity = self.current_humidity
-                    if (
-                        has_local_humidity
-                        and self._virtual_target_humidity is not None
-                        and curr_humidity is not None
-                    ):
-                        if not self._active_overdrive_humidity:
-                            want_dehum = curr_humidity > (
-                                self._virtual_target_humidity
-                                + DEFAULT_HUMIDITY_DEADBAND
-                            )
-                        else:
-                            want_dehum = curr_humidity > self._virtual_target_humidity
-
-                        min_overcool_target = (
-                            self._virtual_target_temperature_high
-                            - self._max_humidity_overcool
-                        )
-                        can_overcool = (
-                            sensor_temp > min_overcool_target
-                            if sensor_temp is not None
-                            else False
-                        )
-
-                        if (
-                            want_dehum
-                            and can_overcool
-                            and (not_cooling or self._active_overdrive_humidity)
-                        ):
-                            self._active_overdrive_humidity = True
-                            overdrive_adjust_high = OVERDRIVE_ADJUSTMENT_COOL
-                            _LOGGER.info(
-                                "Humidity Overdrive active (dual high): Dehumidification required (current: %s%%, target: %s%%) but thermostat idle. Applying %s offset.",
-                                curr_humidity,
-                                self._virtual_target_humidity,
-                                overdrive_adjust_high,
-                            )
-                        else:
-                            self._active_overdrive_humidity = False
-                    else:
-                        self._active_overdrive_humidity = False
+                if not want_cool:
+                    humidity_adjust = self._evaluate_humidity_overdrive(
+                        self._virtual_target_temperature_high,
+                        sensor_temp,
+                        not_cooling,
+                        label=" (dual high)",
+                    )
+                    if humidity_adjust != 0.0:
+                        overdrive_adjust_high = humidity_adjust
                 else:
                     self._active_overdrive_humidity = False
 

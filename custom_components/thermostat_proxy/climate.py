@@ -117,7 +117,7 @@ PENDING_REQUEST_TIMEOUT = 120.0  # Seconds before a pending request expires
 EXTERNAL_CHANGE_TOLERANCE = (
     0.2  # Degrees to ignore as noise/rounding for external detection
 )
-POST_WRITE_GRACE_PERIOD = 10.0  # Seconds to ignore external changes after a write
+POST_WRITE_GRACE_PERIOD = 45.0  # Seconds to ignore external changes after a write
 REALIGN_TARGET_TOLERANCE = (
     0.1  # Tolerance for "already at target" checks during realignment
 )
@@ -916,6 +916,26 @@ class CustomThermostatEntity(RestoreEntity, ClimateEntity):
         if real_high is not None:
             self._last_real_target_temp_high = real_high
 
+        strict_tolerance = self._pending_request_tolerance()
+        loose_tolerance = max(
+            PENDING_REQUEST_TOLERANCE_MAX,
+            (self._target_temp_step or 0) * 0.75,
+        )
+
+        # Always try to consume pending requests for the current real targets
+        # so they don't leak and falsely suppress future changes.
+        low_pending_consumed = False
+        if real_low is not None:
+            low_pending_consumed = self._consume_real_target_request(
+                real_low, strict_tolerance
+            )
+
+        high_pending_consumed = False
+        if real_high is not None:
+            high_pending_consumed = self._consume_real_target_request(
+                real_high, strict_tolerance
+            )
+
         if was_not_controlling:
             return
 
@@ -929,24 +949,18 @@ class CustomThermostatEntity(RestoreEntity, ClimateEntity):
             else EXTERNAL_CHANGE_TOLERANCE
         )
 
-        strict_tolerance = self._pending_request_tolerance()
-        loose_tolerance = max(
-            PENDING_REQUEST_TOLERANCE_MAX,
-            (self._target_temp_step or 0) * 0.75,
-        )
-
         low_changed = (
             real_low is not None
             and previous_low is not None
             and not math.isclose(real_low, previous_low, abs_tol=abs_tol)
-            and not self._consume_real_target_request(real_low, strict_tolerance)
+            and not low_pending_consumed
             and not self._has_pending_real_target_request(real_low, loose_tolerance)
         )
         high_changed = (
             real_high is not None
             and previous_high is not None
             and not math.isclose(real_high, previous_high, abs_tol=abs_tol)
-            and not self._consume_real_target_request(real_high, strict_tolerance)
+            and not high_pending_consumed
             and not self._has_pending_real_target_request(real_high, loose_tolerance)
         )
 
@@ -979,8 +993,31 @@ class CustomThermostatEntity(RestoreEntity, ClimateEntity):
                     new_high = self._apply_target_constraints(derived)
                     if new_high is not None:
                         self._virtual_target_temperature_high = new_high
+
             self._last_real_write_time = time.monotonic()
             self.async_write_ha_state()
+
+            if low_changed or high_changed:
+                parts = []
+                if high_changed and self._virtual_target_temperature_high is not None:
+                    parts.append(f"High={self._virtual_target_temperature_high}")
+                if low_changed and self._virtual_target_temperature_low is not None:
+                    parts.append(f"Low={self._virtual_target_temperature_low}")
+
+                if parts:
+                    self.hass.async_create_task(
+                        self.hass.services.async_call(
+                            LOGBOOK_DOMAIN,
+                            LOGBOOK_SERVICE_LOG,
+                            {
+                                "name": self.name,
+                                "entity_id": self.entity_id,
+                                "message": f"Updated dual setpoints: {', '.join(parts)} (by Physical Thermostat Override)",
+                            },
+                            blocking=False,
+                        )
+                    )
+
             return
 
         if real_low is not None:

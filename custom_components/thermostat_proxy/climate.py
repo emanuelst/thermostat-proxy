@@ -993,7 +993,7 @@ class CustomThermostatEntity(RestoreEntity, ClimateEntity):
                     new_high = self._apply_target_constraints(derived)
                     if new_high is not None:
                         self._virtual_target_temperature_high = new_high
-            
+
             self._last_real_write_time = time.monotonic()
             self.async_write_ha_state()
 
@@ -1003,7 +1003,7 @@ class CustomThermostatEntity(RestoreEntity, ClimateEntity):
                     parts.append(f"High={self._virtual_target_temperature_high}")
                 if low_changed and self._virtual_target_temperature_low is not None:
                     parts.append(f"Low={self._virtual_target_temperature_low}")
-                
+
                 if parts:
                     self.hass.async_create_task(
                         self.hass.services.async_call(

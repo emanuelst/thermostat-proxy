@@ -1,5 +1,4 @@
 import pytest
-from unittest.mock import MagicMock
 from homeassistant.core import HomeAssistant
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 import time

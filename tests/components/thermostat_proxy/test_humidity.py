@@ -1,6 +1,6 @@
 """Tests for humidity support in Thermostat Proxy."""
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -21,7 +21,7 @@ from custom_components.thermostat_proxy.const import (
 from homeassistant import config_entries
 from homeassistant.components.climate import ClimateEntityFeature, HVACMode
 from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN
-from homeassistant.core import HomeAssistant, State
+from homeassistant.core import Context, HomeAssistant, State
 from homeassistant.data_entry_flow import FlowResultType
 
 
@@ -250,6 +250,74 @@ async def test_async_set_humidity(hass: HomeAssistant):
     # Clamp above max
     await proxy.async_set_humidity(110)
     assert proxy.target_humidity == 99
+
+
+@pytest.mark.asyncio
+async def test_async_set_humidity_logbook_entry(hass: HomeAssistant):
+    """Test logbook entry when setting target humidity."""
+    proxy = create_proxy_with_humidity(hass)
+    proxy.entity_id = "climate.proxy"
+    proxy.name = "Test Proxy"
+
+    # Set current humidity on remote sensor
+    hass.states.async_set("sensor.remote_humidity", "55")
+    proxy._sensor_humidity_states["sensor.remote_humidity"] = State(
+        "sensor.remote_humidity", "55"
+    )
+
+    await proxy.async_set_humidity(45)
+
+    logbook_calls = [
+        call for call in hass.services.async_call.call_args_list
+        if call[0][0] == "logbook"
+    ]
+    assert len(logbook_calls) >= 1
+    domain, service, data = logbook_calls[0][0]
+    assert domain == "logbook"
+    assert service == "log"
+    assert data["name"] == "Test Proxy"
+    assert data["entity_id"] == "climate.proxy"
+    assert "Target humidity set to 45%" in data["message"]
+    assert "previous_target=50%" in data["message"]
+    assert "current_humidity=55%" in data["message"]
+    assert "humidity_sensor=Remote" in data["message"]
+    assert "humidity_entity=sensor.remote_humidity" in data["message"]
+
+
+@pytest.mark.asyncio
+async def test_async_set_humidity_logbook_with_actor(hass: HomeAssistant):
+    """Test logbook entry attribution when actor is identified."""
+    proxy = create_proxy_with_humidity(hass)
+    proxy.entity_id = "climate.proxy"
+    proxy.name = "Test Proxy"
+    proxy._context = Context(user_id="user_123")
+
+    mock_user = MagicMock()
+    mock_user.name = "Jason"
+    hass.auth.async_get_user = AsyncMock(return_value=mock_user)
+
+    await proxy.async_set_humidity(42)
+
+    logbook_calls = [
+        call for call in hass.services.async_call.call_args_list
+        if call[0][0] == "logbook"
+    ]
+    assert len(logbook_calls) >= 1
+    domain, service, data = logbook_calls[0][0]
+    assert domain == "logbook"
+    assert service == "log"
+    assert "Target humidity set to 42% (by Jason)" in data["message"]
+
+
+@pytest.mark.asyncio
+async def test_async_set_humidity_invalid_value(hass: HomeAssistant):
+    """Test setting target humidity with invalid value."""
+    proxy = create_proxy_with_humidity(hass)
+    hass.services.async_call.reset_mock()
+
+    await proxy.async_set_humidity("invalid")  # type: ignore[arg-type]
+    assert proxy.target_humidity == DEFAULT_TARGET_HUMIDITY
+    assert not hass.services.async_call.called
 
 
 @pytest.mark.asyncio

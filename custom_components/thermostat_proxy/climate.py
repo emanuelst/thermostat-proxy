@@ -1718,8 +1718,34 @@ class CustomThermostatEntity(RestoreEntity, ClimateEntity):
 
     async def async_set_humidity(self, humidity: int) -> None:
         """Set new target humidity."""
-        clamped = max(self.min_humidity, min(self.max_humidity, int(humidity)))
+        try:
+            requested = int(humidity)
+        except (ValueError, TypeError):
+            _LOGGER.warning(
+                "Set humidity called with invalid value '%s' for %s",
+                humidity,
+                self.entity_id,
+            )
+            return
+
+        clamped = max(self.min_humidity, min(self.max_humidity, requested))
+        if requested != clamped:
+            _LOGGER.info(
+                "%s target humidity adjusted from %s%% to %s%% to honor limits",
+                self.entity_id,
+                requested,
+                clamped,
+            )
+
+        previous_target = self._virtual_target_humidity
         self._virtual_target_humidity = clamped
+
+        actor_name = await self._get_actor_name()
+        await self._async_log_target_humidity(
+            target_humidity=clamped,
+            previous_target=previous_target,
+            actor_name=actor_name,
+        )
 
         sensor = self._sensor_lookup.get(self._selected_sensor_name)
         if (
@@ -1731,16 +1757,20 @@ class CustomThermostatEntity(RestoreEntity, ClimateEntity):
                 & ClimateEntityFeature.TARGET_HUMIDITY
             )
         ):
-            await self.hass.services.async_call(
-                CLIMATE_DOMAIN,
-                SERVICE_SET_HUMIDITY,
-                {
-                    ATTR_ENTITY_ID: self._real_entity_id,
-                    ATTR_HUMIDITY: clamped,
-                },
-                context=self._context,
-                blocking=True,
-            )
+            try:
+                await self.hass.services.async_call(
+                    CLIMATE_DOMAIN,
+                    SERVICE_SET_HUMIDITY,
+                    {
+                        ATTR_ENTITY_ID: self._real_entity_id,
+                        ATTR_HUMIDITY: clamped,
+                    },
+                    context=self._context,
+                    blocking=True,
+                )
+            except Exception:
+                self._virtual_target_humidity = previous_target
+                raise
 
         self._schedule_target_realign(trigger_source="humidity")
         self.async_write_ha_state()
@@ -1996,6 +2026,46 @@ class CustomThermostatEntity(RestoreEntity, ClimateEntity):
                     "Detected external target change; %s preset to '%s': %s"
                     % (action, self._physical_sensor_name, " | ".join(segments))
                 ),
+            },
+            blocking=False,
+        )
+
+    async def _async_log_target_humidity(
+        self,
+        target_humidity: int,
+        previous_target: int | None = None,
+        actor_name: str | None = None,
+    ) -> None:
+        """Record a logbook entry when target humidity is set."""
+        sensor = self._sensor_lookup.get(self._selected_sensor_name)
+        if sensor and not sensor.is_physical and sensor.humidity_entity_id:
+            active_humidity_name = self._selected_sensor_name
+            active_humidity_entity_id = sensor.humidity_entity_id
+        else:
+            active_humidity_name = self._physical_sensor_name
+            active_humidity_entity_id = self._real_entity_id
+
+        segments: list[str] = []
+        if previous_target is not None and previous_target != target_humidity:
+            segments.append(f"previous_target={previous_target}%")
+        sensor_hum = self.current_humidity
+        if sensor_hum is not None:
+            segments.append(f"current_humidity={sensor_hum:.0f}%")
+        segments.append(f"humidity_sensor={active_humidity_name}")
+        segments.append(f"humidity_entity={active_humidity_entity_id}")
+
+        suffix = f" (by {actor_name})" if actor_name else ""
+        context_text = f": {' | '.join(segments)}" if segments else ""
+        message = f"Target humidity set to {target_humidity}%{suffix}{context_text}"
+        _LOGGER.info("%s %s", self.entity_id, message)
+
+        await self.hass.services.async_call(
+            LOGBOOK_DOMAIN,
+            LOGBOOK_SERVICE_LOG,
+            {
+                "name": self.name,
+                "entity_id": self.entity_id,
+                "message": message,
             },
             blocking=False,
         )
